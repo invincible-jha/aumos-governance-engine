@@ -1,0 +1,40 @@
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test and coverage
+tests/
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+coverage.xml
+
+# Dev config
+.env
+.env.*
+docker-compose*.yml
+Makefile
+
+# Docs
+README.md
+CHANGELOG.md
+CONTRIBUTING.md
+SECURITY.md
+CLAUDE.md
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log

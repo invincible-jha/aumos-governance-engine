@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check src/ tests/
+      - run: ruff format --check src/ tests/
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: mypy src/
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aumos
+          POSTGRES_PASSWORD: aumos_dev
+          POSTGRES_DB: aumos_governance_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres-audit:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aumos_audit
+          POSTGRES_PASSWORD: audit_test_secret
+          POSTGRES_DB: aumos_audit_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+      opa:
+        image: openpolicyagent/opa:0.63.0-rootless
+        ports:
+          - 8181:8181
+        options: >-
+          --health-cmd "wget -q -O- http://localhost:8181/health || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      AUMOS_DATABASE_URL: postgresql+asyncpg://aumos:aumos_dev@localhost:5432/aumos_governance_test
+      AUMOS_GOVERNANCE_AUDIT_DB_URL: postgresql+asyncpg://aumos_audit:audit_test_secret@localhost:5433/aumos_audit_test
+      AUMOS_GOVERNANCE_OPA_URL: http://localhost:8181
+      AUMOS_REDIS_URL: redis://localhost:6379/0
+      AUMOS_ENVIRONMENT: test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v --cov --cov-report=xml
+      - uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t test-build .
+
+  license-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pip-licenses
+      - run: |
+          pip install -e .
+          pip-licenses --fail-on="GPL;AGPL" --allow-only="MIT;BSD;Apache Software License;ISC;PSF;MPL 2.0"

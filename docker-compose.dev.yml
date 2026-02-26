@@ -1,0 +1,164 @@
+version: "3.9"
+
+# =============================================================================
+# docker-compose.dev.yml — aumos-governance-engine
+#
+# Services:
+#   app           — The governance engine FastAPI service
+#   postgres      — Primary database (policies, workflows, evidence)
+#   postgres-audit— SEPARATE audit database (Audit Wall — immutable audit trail)
+#   redis         — Policy evaluation result cache
+#   kafka         — Domain event publishing
+#   zookeeper     — Kafka dependency
+#   opa           — Open Policy Agent (OPA) sidecar for Rego policy evaluation
+# =============================================================================
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-audit:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+    environment:
+      AUMOS_DATABASE_URL: postgresql+asyncpg://aumos:aumos_dev@postgres:5432/aumos_governance
+      AUMOS_GOVERNANCE_AUDIT_DB_URL: postgresql+asyncpg://aumos_audit:audit_dev_secret@postgres-audit:5432/aumos_audit
+      AUMOS_GOVERNANCE_OPA_URL: http://opa:8181
+      AUMOS_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      AUMOS_REDIS_URL: redis://redis:6379/0
+
+  # ---------------------------------------------------------------------------
+  # Primary PostgreSQL — governance policies, workflows, evidence
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: aumos
+      POSTGRES_PASSWORD: aumos_dev
+      POSTGRES_DB: aumos_governance
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aumos"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # ---------------------------------------------------------------------------
+  # Audit PostgreSQL — SEPARATE instance for immutable audit trail (Audit Wall)
+  # Port 5433 to avoid conflict with primary DB.
+  # The audit user has INSERT-only permissions on gov_audit_trail_entries.
+  # ---------------------------------------------------------------------------
+  postgres-audit:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aumos_audit
+      POSTGRES_PASSWORD: audit_dev_secret
+      POSTGRES_DB: aumos_audit
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aumos_audit"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - pgdata_audit:/var/lib/postgresql/data
+      - ./docker/audit-db-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    command: >
+      postgres
+        -c log_statement=all
+        -c log_connections=on
+        -c log_disconnections=on
+
+  # ---------------------------------------------------------------------------
+  # Redis — policy evaluation result cache
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Zookeeper — required by Kafka
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+
+  # ---------------------------------------------------------------------------
+  # Kafka — domain event bus for governance events
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  # ---------------------------------------------------------------------------
+  # OPA (Open Policy Agent) — Rego policy evaluation engine
+  # Runs as sidecar alongside the governance engine.
+  # Policies are pushed to OPA via REST API when activated.
+  # ---------------------------------------------------------------------------
+  opa:
+    image: openpolicyagent/opa:0.63.0-rootless
+    ports:
+      - "8181:8181"
+    command:
+      - "run"
+      - "--server"
+      - "--log-level=info"
+      - "--log-format=json"
+      - "--addr=0.0.0.0:8181"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8181/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  pgdata_audit:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_logs:
