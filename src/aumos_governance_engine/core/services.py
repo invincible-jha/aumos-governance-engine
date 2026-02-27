@@ -35,6 +35,9 @@ from aumos_governance_engine.api.schemas import (
 from aumos_governance_engine.core.interfaces import (
     IAuditTrailRepository,
     IComplianceWorkflowRepository,
+    IComplianceReporter,
+    IConsentManager,
+    IDataResidencyEnforcer,
     IEvidenceRepository,
     IGovernanceEventPublisher,
     IOPAClient,
@@ -1060,6 +1063,385 @@ class RegulationMapperService:
             )
             for c in static_controls
         ]
+
+
+class ConsentService:
+    """Data subject consent lifecycle management.
+
+    Records, verifies, and withdraws consent decisions. All consent operations
+    are delegated to the IConsentManager adapter, which maintains an immutable
+    append-only consent history. After every state-changing operation, an
+    AuditTrailEntry is written.
+
+    Args:
+        consent_manager: Adapter implementing IConsentManager.
+        audit_service: Service for writing immutable audit trail entries.
+    """
+
+    def __init__(
+        self,
+        consent_manager: IConsentManager,
+        audit_service: AuditService,
+    ) -> None:
+        """Initialize ConsentService with injected dependencies.
+
+        Args:
+            consent_manager: Adapter implementing IConsentManager.
+            audit_service: AuditService for writing audit trail entries.
+        """
+        self._consent_manager = consent_manager
+        self._audit_service = audit_service
+
+    async def record_consent(
+        self,
+        tenant: TenantContext,
+        subject_id: str,
+        purpose: str,
+        legal_basis: str,
+        granted: bool,
+        expiry_days: int | None,
+        actor_id: uuid.UUID,
+        metadata: dict[str, Any] | None = None,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a consent decision for a data subject.
+
+        Args:
+            tenant: The tenant context.
+            subject_id: Opaque data subject identifier.
+            purpose: Processing purpose.
+            legal_basis: GDPR legal basis.
+            granted: True if consent given, False if withdrawn.
+            expiry_days: Optional days until expiry.
+            actor_id: UUID of the user recording the consent.
+            metadata: Additional consent context.
+            correlation_id: Optional request correlation ID.
+
+        Returns:
+            Consent record dict with id, tenant_id, subject_id, purpose,
+            granted, captured_at, and expires_at.
+        """
+        logger.info(
+            "Recording consent decision",
+            tenant_id=str(tenant.tenant_id),
+            purpose=purpose,
+            granted=granted,
+            legal_basis=legal_basis,
+        )
+
+        consent_record = await self._consent_manager.record_consent(
+            tenant_id=tenant.tenant_id,
+            subject_id=subject_id,
+            purpose=purpose,
+            legal_basis=legal_basis,
+            granted=granted,
+            expiry_days=expiry_days,
+            metadata=metadata or {},
+        )
+
+        await self._audit_service.record(
+            tenant_id=tenant.tenant_id,
+            event_type="governance.consent.recorded",
+            actor_id=actor_id,
+            resource_type="consent_record",
+            resource_id=uuid.UUID(str(consent_record.get("id", uuid.uuid4()))),
+            action="recorded" if granted else "withdrawn",
+            details={
+                "purpose": purpose,
+                "legal_basis": legal_basis,
+                "granted": granted,
+                "expiry_days": expiry_days,
+            },
+            correlation_id=correlation_id,
+        )
+
+        return consent_record
+
+    async def verify_consent(
+        self,
+        tenant: TenantContext,
+        subject_id: str,
+        purpose: str,
+    ) -> dict[str, Any]:
+        """Verify whether a data subject has active consent for a purpose.
+
+        Args:
+            tenant: The tenant context.
+            subject_id: Opaque data subject identifier.
+            purpose: Processing purpose to verify.
+
+        Returns:
+            Verification dict with has_consent, granted_at, expires_at,
+            withdrawal_at, and legal_basis.
+        """
+        return await self._consent_manager.verify_consent(
+            tenant_id=tenant.tenant_id,
+            subject_id=subject_id,
+            purpose=purpose,
+        )
+
+    async def withdraw_consent(
+        self,
+        tenant: TenantContext,
+        subject_id: str,
+        purpose: str,
+        actor_id: uuid.UUID,
+        reason: str | None = None,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a consent withdrawal and write an audit trail entry.
+
+        Args:
+            tenant: The tenant context.
+            subject_id: Opaque data subject identifier.
+            purpose: Processing purpose to withdraw consent from.
+            actor_id: UUID of the user recording the withdrawal.
+            reason: Optional reason for withdrawal.
+            correlation_id: Optional request correlation ID.
+
+        Returns:
+            Updated consent record dict with withdrawal_at populated.
+        """
+        logger.info(
+            "Recording consent withdrawal",
+            tenant_id=str(tenant.tenant_id),
+            purpose=purpose,
+        )
+
+        consent_record = await self._consent_manager.withdraw_consent(
+            tenant_id=tenant.tenant_id,
+            subject_id=subject_id,
+            purpose=purpose,
+            reason=reason,
+        )
+
+        await self._audit_service.record(
+            tenant_id=tenant.tenant_id,
+            event_type="governance.consent.withdrawn",
+            actor_id=actor_id,
+            resource_type="consent_record",
+            resource_id=uuid.UUID(str(consent_record.get("id", uuid.uuid4()))),
+            action="withdrawn",
+            details={"purpose": purpose, "reason": reason},
+            correlation_id=correlation_id,
+        )
+
+        return consent_record
+
+    async def get_audit_trail(
+        self,
+        tenant: TenantContext,
+        subject_id: str,
+    ) -> list[dict[str, Any]]:
+        """Retrieve the full consent history for a data subject.
+
+        Args:
+            tenant: The tenant context.
+            subject_id: Opaque data subject identifier.
+
+        Returns:
+            List of consent event dicts ordered by captured_at descending.
+        """
+        return await self._consent_manager.get_audit_trail(
+            tenant_id=tenant.tenant_id,
+            subject_id=subject_id,
+        )
+
+
+class DataResidencyService:
+    """Data residency policy evaluation and enforcement.
+
+    Evaluates cross-border data movement requests against tenant-configured
+    residency policies and jurisdiction-specific legal restrictions.
+
+    Args:
+        residency_enforcer: Adapter implementing IDataResidencyEnforcer.
+    """
+
+    def __init__(self, residency_enforcer: IDataResidencyEnforcer) -> None:
+        """Initialize DataResidencyService with injected adapter.
+
+        Args:
+            residency_enforcer: Adapter implementing IDataResidencyEnforcer.
+        """
+        self._enforcer = residency_enforcer
+
+    async def check_transfer(
+        self,
+        tenant: TenantContext,
+        source_region: str,
+        destination_region: str,
+        data_classification: str,
+        data_categories: list[str],
+    ) -> dict[str, Any]:
+        """Check whether a data transfer complies with residency policy.
+
+        Args:
+            tenant: The tenant context.
+            source_region: ISO 3166-1 alpha-2 country or region code of origin.
+            destination_region: ISO 3166-1 alpha-2 destination country or region.
+            data_classification: Data sensitivity classification.
+            data_categories: List of data type labels or GDPR special categories.
+
+        Returns:
+            Dict with allowed, transfer_mechanism, blocking_restrictions,
+            required_safeguards, and jurisdiction_requirements.
+        """
+        logger.info(
+            "Checking data transfer residency compliance",
+            tenant_id=str(tenant.tenant_id),
+            source_region=source_region,
+            destination_region=destination_region,
+            data_classification=data_classification,
+        )
+
+        return await self._enforcer.check_transfer(
+            tenant_id=tenant.tenant_id,
+            source_region=source_region,
+            destination_region=destination_region,
+            data_classification=data_classification,
+            data_categories=data_categories,
+        )
+
+    async def get_policy(self, tenant: TenantContext) -> dict[str, Any]:
+        """Retrieve the data residency policy for a tenant.
+
+        Args:
+            tenant: The tenant context.
+
+        Returns:
+            Policy dict with allowed_regions, restricted_regions, and
+            default_transfer_mechanism.
+        """
+        return await self._enforcer.get_policy(tenant_id=tenant.tenant_id)
+
+    async def validate_storage_location(
+        self,
+        tenant: TenantContext,
+        region: str,
+        data_classification: str,
+    ) -> dict[str, Any]:
+        """Validate that a storage region complies with tenant policy.
+
+        Args:
+            tenant: The tenant context.
+            region: Proposed storage region code.
+            data_classification: Classification of the data to store.
+
+        Returns:
+            Dict with compliant (bool), violations, and recommended_alternatives.
+        """
+        return await self._enforcer.validate_storage_location(
+            tenant_id=tenant.tenant_id,
+            region=region,
+            data_classification=data_classification,
+        )
+
+
+class ComplianceReportService:
+    """Compliance report generation and control status aggregation.
+
+    Generates structured compliance status reports for auditor and regulatory
+    submissions. Delegates rendering to the IComplianceReporter adapter.
+
+    Args:
+        compliance_reporter: Adapter implementing IComplianceReporter.
+    """
+
+    def __init__(self, compliance_reporter: IComplianceReporter) -> None:
+        """Initialize ComplianceReportService with injected adapter.
+
+        Args:
+            compliance_reporter: Adapter implementing IComplianceReporter.
+        """
+        self._reporter = compliance_reporter
+
+    async def generate_report(
+        self,
+        tenant: TenantContext,
+        regulation: str,
+        workflow_ids: list[uuid.UUID],
+        report_format: str = "json",
+        include_evidence: bool = True,
+    ) -> dict[str, Any]:
+        """Generate a compliance status report for a regulation.
+
+        Args:
+            tenant: The tenant context.
+            regulation: Regulation code (soc2, iso27001, hipaa, iso42001,
+                eu_ai_act, fedramp).
+            workflow_ids: Specific workflow UUIDs to include. Empty = all.
+            report_format: Output format ('json', 'pdf', 'csv').
+            include_evidence: Whether to embed evidence artifact links.
+
+        Returns:
+            Report dict with regulation, generated_at, summary, controls,
+            evidence_count, compliance_score, and download_uri.
+        """
+        logger.info(
+            "Generating compliance report",
+            tenant_id=str(tenant.tenant_id),
+            regulation=regulation,
+            report_format=report_format,
+            workflow_count=len(workflow_ids),
+        )
+
+        return await self._reporter.generate_report(
+            tenant_id=tenant.tenant_id,
+            regulation=regulation,
+            workflow_ids=workflow_ids,
+            report_format=report_format,
+            include_evidence=include_evidence,
+        )
+
+    async def get_control_status(
+        self,
+        tenant: TenantContext,
+        regulation: str,
+        control_id: str,
+    ) -> dict[str, Any]:
+        """Get the current status of a specific compliance control.
+
+        Args:
+            tenant: The tenant context.
+            regulation: Regulation code.
+            control_id: Control identifier (e.g., 'CC6.1', 'AC-2').
+
+        Returns:
+            Dict with control_id, status (passed/failed/not_assessed),
+            evidence_count, last_assessed, and automated.
+        """
+        return await self._reporter.get_control_status(
+            tenant_id=tenant.tenant_id,
+            regulation=regulation,
+            control_id=control_id,
+        )
+
+    async def get_readiness_score(
+        self,
+        tenant: TenantContext,
+        regulation: str,
+    ) -> dict[str, Any]:
+        """Compute an overall compliance readiness score for a regulation.
+
+        Args:
+            tenant: The tenant context.
+            regulation: Regulation code.
+
+        Returns:
+            Dict with regulation, score (0.0-1.0), breakdown_by_domain,
+            blocking_gaps, and recommendations.
+        """
+        logger.info(
+            "Computing compliance readiness score",
+            tenant_id=str(tenant.tenant_id),
+            regulation=regulation,
+        )
+
+        return await self._reporter.get_readiness_score(
+            tenant_id=tenant.tenant_id,
+            regulation=regulation,
+        )
 
 
 # ---------------------------------------------------------------------------

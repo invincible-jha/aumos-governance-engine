@@ -12,6 +12,9 @@ Protocols defined:
 - IRegulationMappingRepository
 - IOPAClient
 - IGovernanceEventPublisher
+- IConsentManager
+- IDataResidencyEnforcer
+- IComplianceReporter
 """
 
 import uuid
@@ -529,5 +532,229 @@ class IGovernanceEventPublisher(Protocol):
             evidence_type: Evidence type classification.
             collector: auto or manual.
             correlation_id: Optional request correlation ID.
+        """
+        ...
+
+
+class IConsentManager(Protocol):
+    """Contract for the consent lifecycle management adapter.
+
+    Manages data subject consent records including capture, verification,
+    withdrawal, and expiry. Integrates with GDPR Article 7 obligations.
+    """
+
+    async def record_consent(
+        self,
+        tenant_id: uuid.UUID,
+        subject_id: str,
+        purpose: str,
+        legal_basis: str,
+        granted: bool,
+        expiry_days: int | None,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Record a consent decision for a data subject.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            subject_id: Opaque data subject identifier (hashed or pseudonymous).
+            purpose: Processing purpose (e.g., 'analytics', 'marketing').
+            legal_basis: GDPR legal basis (e.g., 'consent', 'legitimate_interest').
+            granted: True if consent was given, False if withdrawn.
+            expiry_days: Optional days until consent expires. None = no expiry.
+            metadata: Additional consent context (channel, version, etc.).
+
+        Returns:
+            Consent record dict with id, tenant_id, subject_id, purpose,
+            granted, captured_at, and expires_at.
+        """
+        ...
+
+    async def verify_consent(
+        self,
+        tenant_id: uuid.UUID,
+        subject_id: str,
+        purpose: str,
+    ) -> dict[str, Any]:
+        """Verify whether a data subject has active consent for a purpose.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            subject_id: Opaque data subject identifier.
+            purpose: Processing purpose to verify.
+
+        Returns:
+            Verification dict with has_consent, granted_at, expires_at,
+            withdrawal_at, and legal_basis.
+        """
+        ...
+
+    async def withdraw_consent(
+        self,
+        tenant_id: uuid.UUID,
+        subject_id: str,
+        purpose: str,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        """Record a consent withdrawal for a data subject and purpose.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            subject_id: Opaque data subject identifier.
+            purpose: Processing purpose to withdraw consent from.
+            reason: Optional reason for withdrawal.
+
+        Returns:
+            Updated consent record dict with withdrawal_at populated.
+        """
+        ...
+
+    async def get_audit_trail(
+        self,
+        tenant_id: uuid.UUID,
+        subject_id: str,
+    ) -> list[dict[str, Any]]:
+        """Retrieve the full consent history for a data subject.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            subject_id: Opaque data subject identifier.
+
+        Returns:
+            List of consent event dicts ordered by captured_at descending.
+        """
+        ...
+
+
+class IDataResidencyEnforcer(Protocol):
+    """Contract for the data residency enforcement adapter.
+
+    Evaluates data movement requests against tenant residency policies and
+    jurisdiction-specific transfer restrictions (GDPR Chapter V, etc.).
+    """
+
+    async def check_transfer(
+        self,
+        tenant_id: uuid.UUID,
+        source_region: str,
+        destination_region: str,
+        data_classification: str,
+        data_categories: list[str],
+    ) -> dict[str, Any]:
+        """Check whether a data transfer complies with residency policy.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            source_region: ISO 3166-1 alpha-2 country or region code of origin.
+            destination_region: ISO 3166-1 alpha-2 destination country or region.
+            data_classification: Data sensitivity classification (public/internal/
+                confidential/restricted).
+            data_categories: List of GDPR special category indicators or
+                general data type labels.
+
+        Returns:
+            Dict with allowed (bool), transfer_mechanism, blocking_restrictions,
+            required_safeguards, and jurisdiction_requirements.
+        """
+        ...
+
+    async def get_policy(
+        self,
+        tenant_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Retrieve the data residency policy for a tenant.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+
+        Returns:
+            Policy dict with allowed_regions, restricted_regions, and
+            default_transfer_mechanism.
+        """
+        ...
+
+    async def validate_storage_location(
+        self,
+        tenant_id: uuid.UUID,
+        region: str,
+        data_classification: str,
+    ) -> dict[str, Any]:
+        """Validate that a storage region complies with tenant policy.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            region: Proposed storage region code.
+            data_classification: Classification of the data to store.
+
+        Returns:
+            Dict with compliant (bool), violations, and recommended_alternatives.
+        """
+        ...
+
+
+class IComplianceReporter(Protocol):
+    """Contract for the compliance report generation adapter.
+
+    Generates structured compliance status reports suitable for submission
+    to auditors, regulators, and internal governance boards.
+    """
+
+    async def generate_report(
+        self,
+        tenant_id: uuid.UUID,
+        regulation: str,
+        workflow_ids: list[uuid.UUID],
+        report_format: str,
+        include_evidence: bool,
+    ) -> dict[str, Any]:
+        """Generate a compliance status report for a regulation.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            regulation: Regulation code (soc2, iso27001, hipaa, iso42001,
+                eu_ai_act, fedramp).
+            workflow_ids: Specific workflow UUIDs to include. Empty = all.
+            report_format: Output format ('json', 'pdf', 'csv').
+            include_evidence: Whether to embed evidence artifact links.
+
+        Returns:
+            Report dict with regulation, generated_at, summary, controls,
+            evidence_count, compliance_score, and download_uri.
+        """
+        ...
+
+    async def get_control_status(
+        self,
+        tenant_id: uuid.UUID,
+        regulation: str,
+        control_id: str,
+    ) -> dict[str, Any]:
+        """Get the current status of a specific compliance control.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            regulation: Regulation code.
+            control_id: Control identifier.
+
+        Returns:
+            Dict with control_id, status (passed/failed/not_assessed),
+            evidence_count, last_assessed, and automated.
+        """
+        ...
+
+    async def get_readiness_score(
+        self,
+        tenant_id: uuid.UUID,
+        regulation: str,
+    ) -> dict[str, Any]:
+        """Compute an overall compliance readiness score for a regulation.
+
+        Args:
+            tenant_id: Owning tenant UUID.
+            regulation: Regulation code.
+
+        Returns:
+            Dict with regulation, score (0.0-1.0), breakdown_by_domain,
+            blocking_gaps, and recommendations.
         """
         ...
