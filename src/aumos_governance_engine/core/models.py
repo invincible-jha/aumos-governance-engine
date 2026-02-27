@@ -10,6 +10,11 @@ Models:
 - EvidenceRecord      — Compliance evidence artifacts linking controls to proof
 - RegulationMapping   — Mapping of regulation articles to technical control IDs
 
+P1.1 Compliance-as-Code models:
+- CompliancePolicyVersion  — Versioned compliance policies with legal review
+- ComplianceEvaluation     — Evaluation runs of AI models against regulations
+- ComplianceEvidenceItem   — Individual evidence items from an evaluation
+
 IMPORTANT: AuditTrailEntry is defined here for ORM mapping purposes but it is
 written ONLY via AuditTrailRepository, which connects to the separate audit DB.
 Never write to gov_audit_trail_entries via the primary DB session.
@@ -390,4 +395,242 @@ class RegulationMapping(AumOSModel):
         Text,
         nullable=True,
         comment="Optional implementation notes for the compliance team",
+    )
+
+
+# ---------------------------------------------------------------------------
+# P1.1 Compliance-as-Code models
+# ---------------------------------------------------------------------------
+
+
+class CompliancePolicyVersion(AumOSModel):
+    """Versioned compliance policy record with legal review lifecycle.
+
+    Tracks each version of a compliance policy (Rego or Python-equivalent)
+    against a specific regulation article. Creating a new version does not
+    mutate existing records — a new row is inserted.
+
+    Attributes:
+        policy_id: Business-level policy identifier (stable across versions).
+        regulation: Regulation code (eu_ai_act, hipaa, etc.).
+        article: Article reference within the regulation.
+        version: Monotonically increasing version within policy_id scope.
+        content_hash: SHA-256 hash of the policy_text for tamper-detection.
+        policy_text: Full policy source (Rego or Python-equivalent).
+        effective_date: When this version became/becomes effective.
+        approved_by: UUID of the approver.
+        legal_review_status: Legal review lifecycle state.
+    """
+
+    __tablename__ = "gov_compliance_policy_versions"
+
+    policy_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="Stable business identifier across versions (e.g., eu_ai_act:Art.9)",
+    )
+    regulation: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="Regulation code: eu_ai_act | nist_ai_rmf | iso_42001 | hipaa | sox | dora",
+    )
+    article: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment="Article/section reference within the regulation",
+    )
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="Monotonically increasing version within policy_id scope",
+    )
+    content_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="SHA-256 hex digest of policy_text for tamper-detection",
+    )
+    policy_text: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Full policy source (Rego or Python-equivalent logic)",
+    )
+    effective_date: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When this policy version became/becomes effective (UTC)",
+    )
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        comment="UUID of the user or service that approved this policy version",
+    )
+    legal_review_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+        comment="Legal review state: pending | in_review | approved | rejected",
+    )
+
+
+class ComplianceEvaluation(AumOSModel):
+    """A single compliance evaluation run of an AI model against regulations.
+
+    Records the full results of evaluating an AI system against one or more
+    regulatory frameworks. The results JSONB field contains per-article
+    evaluation details. Evidence items are stored in ComplianceEvidenceItem.
+
+    Attributes:
+        model_id: The AI model identifier that was evaluated.
+        triggered_by: What triggered the evaluation (api, scheduled, ci_cd).
+        regulations_evaluated: List of regulation codes evaluated.
+        results: Per-article evaluation results as structured JSONB.
+        overall_compliant: Whether all evaluations passed.
+        compliant_count: Count of compliant articles.
+        non_compliant_count: Count of non-compliant articles.
+        partial_count: Count of partially compliant articles.
+        not_applicable_count: Count of not-applicable articles.
+        evaluated_at: When the evaluation completed.
+        evaluation_duration_ms: Total evaluation time in milliseconds.
+    """
+
+    __tablename__ = "gov_compliance_evaluations"
+
+    model_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="Identifier of the AI model that was evaluated",
+    )
+    triggered_by: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="api",
+        comment="What triggered the evaluation: api | scheduled | ci_cd | manual",
+    )
+    regulations_evaluated: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="List of regulation codes evaluated in this run",
+    )
+    results: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=dict,
+        comment="Per-article evaluation results with status, violations, and scores",
+    )
+    overall_compliant: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        index=True,
+        comment="Whether all article evaluations passed",
+    )
+    compliant_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of articles that were fully compliant",
+    )
+    non_compliant_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of articles that were non-compliant",
+    )
+    partial_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of articles that were partially compliant",
+    )
+    not_applicable_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of articles that were not applicable to this model",
+    )
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+        comment="When this evaluation completed (UTC)",
+    )
+    evaluation_duration_ms: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Total evaluation duration in milliseconds",
+    )
+
+
+class ComplianceEvidenceItem(AumOSModel):
+    """An individual evidence item collected during a compliance evaluation.
+
+    Each evaluation produces multiple evidence items — one per article per
+    evidence type. These items form the evidentiary basis for compliance claims
+    and are packaged into ZIP evidence packages for auditors.
+
+    Attributes:
+        evaluation_id: FK to the parent ComplianceEvaluation.
+        regulation: Regulation code this evidence addresses.
+        article: Article reference this evidence addresses.
+        requirement: Brief summary of the requirement being evidenced.
+        evidence_type: Classification of the evidence artifact.
+        evidence_ref: Structured reference to the evidence (URI, log ID, etc.).
+        collected_at: When the evidence was collected.
+        expires_at: When the evidence expires and must be re-collected.
+    """
+
+    __tablename__ = "gov_compliance_evidence_items"
+
+    evaluation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        comment="UUID of the parent ComplianceEvaluation",
+    )
+    regulation: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="Regulation code this evidence addresses",
+    )
+    article: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment="Article/section reference within the regulation",
+    )
+    requirement: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Brief summary of the requirement being evidenced",
+    )
+    evidence_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment=(
+            "Evidence type: evaluation_result | control_check | "
+            "audit_log_reference | policy_document | automated_scan"
+        ),
+    )
+    evidence_ref: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=dict,
+        comment="Structured reference to the evidence data (URI, log ID, control list, etc.)",
+    )
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+        comment="When this evidence was collected (UTC)",
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When this evidence expires and must be re-collected (UTC)",
     )
