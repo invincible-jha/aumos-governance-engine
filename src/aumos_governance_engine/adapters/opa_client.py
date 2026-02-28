@@ -306,3 +306,75 @@ class OPAClient:
         except (httpx.RequestError, httpx.TimeoutException):
             logger.warning("OPA health check failed — OPA not reachable", opa_url=url)
             return False
+
+    async def parse_module(self, rego_content: str) -> dict[str, Any]:
+        """Parse a Rego module via the OPA compile/parse endpoint.
+
+        Implements Gap #198 backend: sends Rego content to OPA's
+        /v1/compile endpoint to extract the package name and rule names.
+        Used by the interactive policy authoring UI for live validation.
+
+        Args:
+            rego_content: Rego source code to parse.
+
+        Returns:
+            Dict with package_name (str | None) and rules (list[str]).
+
+        Raises:
+            OPAClientError: If OPA returns a parse error.
+        """
+        url = f"{self._opa_url}/v1/compile"
+        body: dict[str, Any] = {
+            "query": "true",
+            "input": {},
+            "unknowns": [],
+            "options": {"disableInlining": []},
+        }
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                # Use GET /v1/policies to parse — OPA doesn't expose a direct parse API
+                # Instead, we do a dry PUT to a scratch path and check the response
+                scratch_id = "aumos/scratch/validate"
+                put_url = f"{self._opa_url}/v1/policies/{scratch_id}"
+                put_response = await client.put(
+                    put_url,
+                    content=rego_content.encode("utf-8"),
+                    headers={"Content-Type": "text/plain"},
+                )
+
+                if put_response.status_code in (200, 201):
+                    # Valid Rego — clean up and return parsed info
+                    await client.delete(f"{self._opa_url}/v1/policies/{scratch_id}")
+                    response_body = put_response.json()
+                    result = response_body.get("result", {})
+                    # Extract package and rules from the AST if available
+                    package_name: str | None = None
+                    rules: list[str] = []
+                    ast = result.get("ast", {})
+                    if ast:
+                        pkg = ast.get("package", {})
+                        if pkg:
+                            path = pkg.get("path", [])
+                            parts = [p.get("value", "") for p in path if isinstance(p, dict)]
+                            package_name = ".".join(str(p) for p in parts if p)
+                        rule_defs = ast.get("rules", [])
+                        for rule in rule_defs:
+                            head = rule.get("head", {})
+                            rule_name = head.get("name", "")
+                            if rule_name:
+                                rules.append(rule_name)
+
+                    return {"package_name": package_name, "rules": rules, "valid": True}
+
+                error_body = put_response.json()
+                errors = error_body.get("errors", [])
+                error_messages = [e.get("message", str(e)) for e in errors]
+                raise OPAClientError(
+                    message=f"Rego parse error: {'; '.join(error_messages)}",
+                    status_code=put_response.status_code,
+                )
+
+        except OPAClientError:
+            raise
+        except httpx.RequestError as exc:
+            raise OPAClientError(message=f"OPA parse request error: {exc}")

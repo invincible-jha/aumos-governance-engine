@@ -1,0 +1,102 @@
+regulation_code: eu_ai_act
+name: "EU AI Act"
+full_name: "Regulation (EU) 2024/1689 — Artificial Intelligence Act"
+issuing_body: "European Parliament and Council"
+description: >
+  The EU AI Act is the world's first comprehensive horizontal regulation on artificial
+  intelligence. It classifies AI systems by risk level (unacceptable, high, limited,
+  minimal) and imposes proportionate requirements. This template focuses on obligations
+  for high-risk AI systems under Annex III, which include AI used in employment,
+  credit, law enforcement, education, and biometric identification.
+default_duration_days: 365
+review_milestones:
+  - name: "Risk Classification Assessment"
+    offset_days: 30
+    required_evidence_types:
+      - policy_document
+      - config_export
+  - name: "Conformity Assessment"
+    offset_days: 90
+    required_evidence_types:
+      - test_result
+      - policy_document
+      - audit_log
+  - name: "Technical Documentation Review"
+    offset_days: 180
+    required_evidence_types:
+      - policy_document
+      - config_export
+      - test_result
+  - name: "Annual Monitoring Report"
+    offset_days: 365
+    required_evidence_types:
+      - audit_log
+      - test_result
+      - policy_document
+
+controls:
+  - control_id: "Art.9"
+    requirement: "Risk management system: A risk management system shall be established, implemented, documented and maintained throughout the entire lifecycle of the high-risk AI system."
+    evidence_types: [policy_document, audit_log]
+    automated: false
+    notes: "AI risk management plan with identified risks, mitigating measures, and residual risk acceptance."
+
+  - control_id: "Art.10"
+    requirement: "Data and data governance: Training, validation and testing data sets shall meet quality criteria and be relevant, representative, free of errors and complete."
+    evidence_types: [test_result, policy_document]
+    automated: true
+    notes: "Dataset quality validation reports, bias testing across protected characteristics."
+
+  - control_id: "Art.11"
+    requirement: "Technical documentation: Technical documentation shall be drawn up before the high-risk AI system is placed on the market or put into service."
+    evidence_types: [policy_document, config_export]
+    automated: false
+    notes: "Technical documentation per Annex IV: description, design specs, training data info, performance metrics."
+
+  - control_id: "Art.12"
+    requirement: "Record-keeping: High-risk AI systems shall technically allow for the automatic recording of events (logging) throughout the lifetime."
+    evidence_types: [audit_log, config_export]
+    automated: true
+    notes: "Logging configuration and sample audit logs demonstrating tamper-evidence."
+
+  - control_id: "Art.13"
+    requirement: "Transparency and provision of information to deployers: High-risk AI systems shall be designed and developed to be sufficiently transparent."
+    evidence_types: [policy_document]
+    automated: false
+    notes: "Instructions for use and transparency documentation for deployers."
+
+  - control_id: "Art.14"
+    requirement: "Human oversight: High-risk AI systems shall be designed and developed with appropriate human-machine interface tools to allow effective oversight by natural persons."
+    evidence_types: [audit_log, policy_document]
+    automated: true
+    notes: "Human oversight controls documentation and approval audit logs."
+
+  - control_id: "Art.15"
+    requirement: "Accuracy, robustness and cybersecurity: High-risk AI systems shall be designed and developed to achieve an appropriate level of accuracy, robustness and cybersecurity."
+    evidence_types: [test_result, config_export]
+    automated: true
+    notes: "Performance benchmarks, adversarial robustness tests, penetration test results."
+
+  - control_id: "Art.16(a)"
+    requirement: "Quality management system: Providers shall establish, document, implement and maintain a quality management system."
+    evidence_types: [policy_document, audit_log]
+    automated: false
+    notes: "QMS documentation and change management audit records."
+
+  - control_id: "Art.16(d)"
+    requirement: "Conformity assessment: Providers shall ensure the high-risk AI system undergoes the relevant conformity assessment procedure."
+    evidence_types: [test_result, policy_document]
+    automated: false
+    notes: "Conformity assessment report and EU Declaration of Conformity."
+
+  - control_id: "Art.72"
+    requirement: "Post-market monitoring: Providers shall establish and document a post-market monitoring system proportionate to the nature of the high-risk AI technologies."
+    evidence_types: [audit_log, test_result]
+    automated: true
+    notes: "Automated drift detection and model performance monitoring reports."
+
+  - control_id: "Art.26(5)"
+    requirement: "Deployer fundamental rights impact assessment: Deployers of high-risk AI systems shall perform a fundamental rights impact assessment prior to putting the system into use."
+    evidence_types: [policy_document, test_result]
+    automated: false
+    notes: "Fundamental rights impact assessment document with fairness and bias analysis."

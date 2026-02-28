@@ -15,6 +15,15 @@ P1.1 Compliance-as-Code models:
 - ComplianceEvaluation     — Evaluation runs of AI models against regulations
 - ComplianceEvidenceItem   — Individual evidence items from an evaluation
 
+Competitive gap models (gaps 194-201):
+- PolicyTestCase       — Individual test case for a Rego policy (gap 194)
+- PolicyTestRun        — Execution of a set of test cases against a policy (gap 194)
+- PolicyVersion        — Explicit versioning with SHA-256 hash and rollback (gap 196)
+- PolicyEvaluationLog  — Decision log for analytics queries (gap 197)
+- PolicySimulation     — What-if simulation run record (gap 195)
+- OPASidecarStatus     — Health and bundle metadata for OPA sidecar (gap 199)
+- ExternalEvidenceImport — Imported evidence from Jira/ServiceNow (gap 201)
+
 IMPORTANT: AuditTrailEntry is defined here for ORM mapping purposes but it is
 written ONLY via AuditTrailRepository, which connects to the separate audit DB.
 Never write to gov_audit_trail_entries via the primary DB session.
@@ -23,7 +32,7 @@ Never write to gov_audit_trail_entries via the primary DB session.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -633,4 +642,526 @@ class ComplianceEvidenceItem(AumOSModel):
         DateTime(timezone=True),
         nullable=True,
         comment="When this evidence expires and must be re-collected (UTC)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 194 — Rego Policy Testing Framework
+# ---------------------------------------------------------------------------
+
+
+class PolicyTestCase(AumOSModel):
+    """A single test case for a Rego governance policy.
+
+    Test cases define expected OPA evaluation outcomes for specific inputs.
+    They enable CI/CD-style regression testing of policy changes before
+    activation. Each test case is bound to a policy and specifies an
+    input payload and the expected allow/deny outcome.
+
+    Attributes:
+        policy_id: FK to the GovernancePolicy under test (no DB FK — cross-service safe).
+        name: Human-readable test case name.
+        description: What this test case validates.
+        input_data: The JSON input payload to evaluate the policy against.
+        expected_allow: True if the policy should allow the input, False if deny.
+        expected_violations: Optional list of expected violation strings.
+        tags: Optional list of tag strings for grouping test cases.
+    """
+
+    __tablename__ = "gov_policy_test_cases"
+
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        comment="UUID of the GovernancePolicy this test case targets",
+    )
+    name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="Human-readable test case name",
+    )
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="What scenario this test case validates",
+    )
+    input_data: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=dict,
+        comment="JSON input payload to evaluate against the policy",
+    )
+    expected_allow: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        comment="True = expect policy to allow; False = expect deny",
+    )
+    expected_violations: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="Optional list of expected violation message substrings",
+    )
+    tags: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="Optional tag strings for grouping and filtering test cases",
+    )
+
+
+class PolicyTestRun(AumOSModel):
+    """Execution record for a batch of policy test cases.
+
+    Created each time a test suite is executed. Stores aggregate pass/fail
+    counts and per-test-case results. Writing to the Audit Wall is required
+    for every test run to maintain traceability of policy quality gates.
+
+    Attributes:
+        policy_id: FK to the GovernancePolicy under test.
+        test_case_ids: List of test case UUIDs included in this run.
+        triggered_by: User or system that triggered the run.
+        status: Run lifecycle state — running | passed | failed | error.
+        total_cases: Total number of test cases in the run.
+        passed_cases: Count of test cases that passed.
+        failed_cases: Count of test cases that failed.
+        error_cases: Count of test cases that errored.
+        results: Per-test-case result details (JSONB array).
+        started_at: When the run started.
+        completed_at: When the run completed.
+        duration_ms: Total run duration in milliseconds.
+    """
+
+    __tablename__ = "gov_policy_test_runs"
+
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        comment="UUID of the GovernancePolicy that was tested",
+    )
+    test_case_ids: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="List of PolicyTestCase UUIDs included in this run",
+    )
+    triggered_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        comment="UUID of the user or service that triggered the test run",
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="running",
+        index=True,
+        comment="Run lifecycle: running | passed | failed | error",
+    )
+    total_cases: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Total number of test cases in this run",
+    )
+    passed_cases: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of test cases that produced the expected outcome",
+    )
+    failed_cases: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of test cases that produced an unexpected outcome",
+    )
+    error_cases: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of test cases that errored during OPA evaluation",
+    )
+    results: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="Per-test-case result objects: {test_case_id, passed, actual_allow, error}",
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+        comment="When the test run started (UTC)",
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the test run completed (UTC)",
+    )
+    duration_ms: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Total run duration in milliseconds",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 196 — Policy Versioning with Rollback
+# ---------------------------------------------------------------------------
+
+
+class PolicyVersion(AumOSModel):
+    """Explicit version snapshot of a GovernancePolicy's Rego content.
+
+    Every time a policy is updated or a new version activated, a PolicyVersion
+    record is created capturing the full Rego source at that point in time.
+    The SHA-256 hash enables tamper-detection. Rollback creates a new
+    PolicyVersion by copying a prior version's Rego content.
+
+    Attributes:
+        policy_id: FK to the GovernancePolicy (stable across versions).
+        version_number: Monotonically increasing version within policy scope.
+        rego_content: Full Rego source at this version.
+        sha256_hash: SHA-256 hex digest of rego_content.
+        change_description: Why this version was created.
+        authored_by: UUID of the user who authored this version.
+        activated_at: When this version was activated in OPA (None = not yet activated).
+        is_current: True only for the most recently activated version.
+    """
+
+    __tablename__ = "gov_policy_versions"
+
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        comment="UUID of the GovernancePolicy (stable across all versions)",
+    )
+    version_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="Monotonically increasing version number within policy scope",
+    )
+    rego_content: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Full Rego source code at this version",
+    )
+    sha256_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="SHA-256 hex digest of rego_content for tamper detection",
+    )
+    change_description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Human-readable description of what changed in this version",
+    )
+    authored_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        comment="UUID of the user who authored this policy version",
+    )
+    activated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When this version was pushed to OPA and activated (UTC)",
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        index=True,
+        comment="True only for the single most-recently activated version",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 195 — Policy Simulation / Dry-Run
+# ---------------------------------------------------------------------------
+
+
+class PolicySimulation(AumOSModel):
+    """Record of a policy simulation (dry-run) run.
+
+    Simulations evaluate a policy against a set of historical or hypothetical
+    inputs without affecting production state. Used for 'what-if' analysis —
+    e.g., 'how would this new Rego policy have decided these past requests?'
+
+    Attributes:
+        policy_id: The policy being simulated (may be a draft version).
+        scenario_name: Human-readable simulation scenario label.
+        input_dataset: List of input objects to evaluate.
+        results: Simulation outcome per input — {input_index, allow, violations}.
+        allow_count: Count of inputs that would be allowed.
+        deny_count: Count of inputs that would be denied.
+        triggered_by: UUID of the user who ran the simulation.
+        completed_at: When the simulation completed.
+        duration_ms: Simulation duration in milliseconds.
+    """
+
+    __tablename__ = "gov_policy_simulations"
+
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        comment="UUID of the policy being simulated",
+    )
+    scenario_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="Human-readable label for this simulation scenario",
+    )
+    input_dataset: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="List of input payloads evaluated during the simulation",
+    )
+    results: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="Per-input simulation results: {input_index, allow, violations}",
+    )
+    allow_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of inputs that would be allowed by the policy",
+    )
+    deny_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Count of inputs that would be denied by the policy",
+    )
+    triggered_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        comment="UUID of the user who initiated this simulation",
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the simulation completed (UTC)",
+    )
+    duration_ms: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Simulation duration in milliseconds",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 197 — Decision Log Analytics
+# ---------------------------------------------------------------------------
+
+
+class PolicyEvaluationLog(AumOSModel):
+    """Persistent log of individual policy evaluation decisions.
+
+    Every call to PolicyService.evaluate_policy() appends a row here.
+    This table is the data source for DecisionAnalyticsService which
+    provides aggregated metrics, latency percentiles, and violation trends.
+
+    This table accumulates high volume — keep indexed on (policy_id, evaluated_at)
+    and partition by month in production.
+
+    Attributes:
+        policy_id: The policy that was evaluated.
+        input_hash: SHA-256 of the input payload (for dedup/caching, not PII).
+        allow_result: Whether the policy allowed the request.
+        violations: List of violation strings returned by OPA.
+        latency_ms: Evaluation latency in milliseconds.
+        evaluated_at: Timestamp of the evaluation.
+        actor_id: UUID of the user who triggered the evaluation.
+        correlation_id: Request correlation ID.
+    """
+
+    __tablename__ = "gov_policy_evaluation_logs"
+
+    policy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        comment="UUID of the GovernancePolicy that was evaluated",
+    )
+    input_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="SHA-256 of the input payload (not stored raw — privacy)",
+    )
+    allow_result: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        index=True,
+        comment="True if the policy allowed the request",
+    )
+    violations: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="Violation strings returned by OPA for this evaluation",
+    )
+    latency_ms: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        comment="Evaluation latency in milliseconds",
+    )
+    evaluated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+        comment="When this evaluation occurred (UTC)",
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+        comment="UUID of the user or service that triggered this evaluation",
+    )
+    correlation_id: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="X-Request-ID for distributed tracing",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 199 — OPA Bundle Distribution
+# ---------------------------------------------------------------------------
+
+
+class OPASidecarStatus(AumOSModel):
+    """Health and bundle metadata for the OPA sidecar instance.
+
+    Records the last-known state of the OPA sidecar — its version, which
+    bundles are currently loaded, and the last health-check result. Used
+    by the bundle distribution endpoints to report sidecar status.
+
+    Attributes:
+        sidecar_name: Unique name/label for this OPA instance.
+        opa_version: OPA binary version string.
+        loaded_bundles: List of bundle IDs currently loaded in OPA.
+        last_health_check_at: When the last health check was performed.
+        is_healthy: Whether OPA was healthy at last check.
+        bundle_etag: ETag of the last bundle sent (for version negotiation).
+    """
+
+    __tablename__ = "gov_opa_sidecar_status"
+
+    sidecar_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="Unique identifier for this OPA sidecar instance",
+    )
+    opa_version: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+        comment="OPA binary version string reported by /health endpoint",
+    )
+    loaded_bundles: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        comment="List of bundle policy IDs currently loaded in this OPA instance",
+    )
+    last_health_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Timestamp of the last OPA health check (UTC)",
+    )
+    is_healthy: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Whether OPA was healthy at the last health check",
+    )
+    bundle_etag: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="ETag of the last bundle distributed (for version negotiation)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 201 — External Evidence Import
+# ---------------------------------------------------------------------------
+
+
+class ExternalEvidenceImport(AumOSModel):
+    """Record of an evidence item imported from an external system.
+
+    Tracks evidence imported from Jira, ServiceNow, or via inbound webhook.
+    The import creates an EvidenceRecord in the primary store and records
+    the external system reference here for bi-directional traceability.
+
+    Attributes:
+        evidence_record_id: FK to the created EvidenceRecord.
+        workflow_id: FK to the ComplianceWorkflow this import targets.
+        source_system: The external system — jira | servicenow | webhook.
+        external_id: The external item ID (Jira issue key, SN ticket number, etc.).
+        external_url: Direct URL to the external item.
+        import_status: Whether the import succeeded or failed.
+        import_error: Error message if the import failed.
+        imported_at: When the import was performed.
+        raw_payload: The raw data from the external system (for audit purposes).
+    """
+
+    __tablename__ = "gov_external_evidence_imports"
+
+    evidence_record_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+        comment="UUID of the created EvidenceRecord (null if import failed)",
+    )
+    workflow_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        index=True,
+        comment="UUID of the target ComplianceWorkflow",
+    )
+    source_system: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        comment="External system: jira | servicenow | webhook",
+    )
+    external_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="External item identifier (e.g., PROJ-1234 for Jira)",
+    )
+    external_url: Mapped[str | None] = mapped_column(
+        String(2048),
+        nullable=True,
+        comment="Direct URL to the external evidence item",
+    )
+    import_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pending",
+        comment="Import lifecycle: pending | success | failed",
+    )
+    import_error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Error message if import_status is failed",
+    )
+    imported_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the import completed (UTC)",
+    )
+    raw_payload: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=dict,
+        comment="Raw data from the external system (for audit and re-import)",
     )

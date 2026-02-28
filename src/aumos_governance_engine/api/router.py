@@ -21,7 +21,7 @@ Endpoints:
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,17 +42,33 @@ from aumos_governance_engine.adapters.repositories import (
 )
 from aumos_governance_engine.api.schemas import (
     AuditTrailEntryResponse,
+    BundleStatusResponse,
     ComplianceDashboardResponse,
     ComplianceWorkflowCreateRequest,
     ComplianceWorkflowResponse,
+    DecisionSummaryResponse,
     EvidenceRecordResponse,
     EvidenceSubmitRequest,
+    ExternalEvidenceImportResponse,
     GovernancePolicyCreateRequest,
     GovernancePolicyResponse,
+    JiraEvidenceImportRequest,
+    LatencyPercentilesResponse,
     PolicyEvaluateRequest,
     PolicyEvaluateResponse,
+    PolicyRollbackRequest,
+    PolicySimulationRequest,
+    PolicySimulationResponse,
+    PolicyTestCaseCreateRequest,
+    PolicyTestCaseResponse,
+    PolicyTestRunRequest,
+    PolicyTestRunResponse,
+    PolicyVersionResponse,
+    RegoValidationRequest,
+    RegoValidationResponse,
     RegulationControlResponse,
     RegulationListResponse,
+    ServiceNowEvidenceImportRequest,
 )
 from aumos_governance_engine.core.services import (
     AuditService,
@@ -607,3 +623,665 @@ async def get_regulation_controls(
         tenant=tenant,
         automated_only=automated_only,
     )
+
+
+# ---------------------------------------------------------------------------
+# Gap 194 — Policy Test Cases and Runs
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/policies/{policy_id}/tests",
+    response_model=PolicyTestCaseResponse,
+    status_code=201,
+)
+async def create_policy_test_case(
+    policy_id: uuid.UUID,
+    request: PolicyTestCaseCreateRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> PolicyTestCaseResponse:
+    """Create a test case for a governance policy.
+
+    Test cases define expected OPA evaluation outcomes for specific inputs,
+    enabling CI/CD-style regression testing of policy changes.
+
+    Args:
+        policy_id: The policy UUID.
+        request: Test case creation request.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+
+    Returns:
+        The created PolicyTestCase.
+    """
+    from aumos_governance_engine.adapters.policy_testing import PolicyTestCaseRepository
+
+    repo = PolicyTestCaseRepository(db)
+    tc = await repo.create(
+        tenant=tenant,
+        policy_id=policy_id,
+        name=request.name,
+        input_data=request.input_data,
+        expected_allow=request.expected_allow,
+        description=request.description,
+        expected_violations=request.expected_violations,
+        tags=request.tags,
+    )
+    return PolicyTestCaseResponse(
+        id=tc.id,
+        tenant_id=tc.tenant_id,
+        policy_id=tc.policy_id,
+        name=tc.name,
+        description=tc.description,
+        input_data=tc.input_data,
+        expected_allow=tc.expected_allow,
+        expected_violations=tc.expected_violations,
+        tags=tc.tags,
+        created_at=tc.created_at,
+        updated_at=tc.updated_at,
+    )
+
+
+@router.get("/policies/{policy_id}/tests", response_model=list[PolicyTestCaseResponse])
+async def list_policy_test_cases(
+    policy_id: uuid.UUID,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+) -> list[PolicyTestCaseResponse]:
+    """List test cases for a governance policy.
+
+    Args:
+        policy_id: The policy UUID.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+        page: Page number.
+        page_size: Records per page.
+
+    Returns:
+        List of policy test cases.
+    """
+    from aumos_governance_engine.adapters.policy_testing import PolicyTestCaseRepository
+
+    repo = PolicyTestCaseRepository(db)
+    test_cases = await repo.list_by_policy(
+        policy_id=policy_id,
+        tenant=tenant,
+        page=page,
+        page_size=page_size,
+    )
+    return [
+        PolicyTestCaseResponse(
+            id=tc.id,
+            tenant_id=tc.tenant_id,
+            policy_id=tc.policy_id,
+            name=tc.name,
+            description=tc.description,
+            input_data=tc.input_data,
+            expected_allow=tc.expected_allow,
+            expected_violations=tc.expected_violations,
+            tags=tc.tags,
+            created_at=tc.created_at,
+            updated_at=tc.updated_at,
+        )
+        for tc in test_cases
+    ]
+
+
+@router.post(
+    "/policies/{policy_id}/tests/run",
+    response_model=PolicyTestRunResponse,
+    status_code=201,
+)
+async def run_policy_tests(
+    policy_id: uuid.UUID,
+    request: PolicyTestRunRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    audit_db: Annotated[AsyncSession, Depends(get_audit_db_session)],
+    opa_client: Annotated[OPAClient, Depends(lambda: OPAClient())],
+) -> PolicyTestRunResponse:
+    """Execute a test suite for a governance policy.
+
+    Runs all selected test cases in parallel against a temporary OPA
+    policy upload. Writes the run result to the Audit Wall.
+
+    Args:
+        policy_id: The policy UUID.
+        request: Test run configuration.
+        tenant: Tenant context from auth middleware.
+        db: Primary database session.
+        audit_db: Audit Wall database session.
+        opa_client: OPA REST API client.
+
+    Returns:
+        The completed test run record.
+    """
+    from aumos_governance_engine.adapters.audit_wall import AuditTrailRepository
+    from aumos_governance_engine.adapters.policy_testing import (
+        PolicyTestCaseRepository,
+        PolicyTestRunRepository,
+        PolicyTestService,
+    )
+
+    # Fetch the policy to get its Rego content
+    policy_repo = PolicyRepository(db)
+    policy = await policy_repo.get_by_id(policy_id, tenant)
+
+    tc_repo = PolicyTestCaseRepository(db)
+    run_repo = PolicyTestRunRepository(db)
+    audit_repo = AuditTrailRepository(audit_db)
+    svc = PolicyTestService(
+        test_case_repo=tc_repo,
+        test_run_repo=run_repo,
+        opa_client=opa_client,
+        audit_trail_repo=audit_repo,
+    )
+
+    run = await svc.run_tests(
+        tenant=tenant,
+        policy_id=policy_id,
+        rego_content=policy.rego_content or "",
+        actor_id=tenant.user_id,
+        test_case_ids=request.test_case_ids,
+    )
+
+    return PolicyTestRunResponse(
+        id=run.id,
+        tenant_id=run.tenant_id,
+        policy_id=run.policy_id,
+        status=run.status,
+        total_cases=run.total_cases,
+        passed_cases=run.passed_cases,
+        failed_cases=run.failed_cases,
+        error_cases=run.error_cases,
+        results=run.results,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        duration_ms=run.duration_ms,
+        created_at=run.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 195 — Policy Simulation
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/policies/{policy_id}/simulate",
+    response_model=PolicySimulationResponse,
+    status_code=201,
+)
+async def simulate_policy(
+    policy_id: uuid.UUID,
+    request: PolicySimulationRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    opa_client: Annotated[OPAClient, Depends(lambda: OPAClient())],
+) -> PolicySimulationResponse:
+    """Run a dry-run simulation for a governance policy.
+
+    Evaluates the policy (or a provided Rego override) against a dataset
+    of inputs without affecting production state. Useful for what-if analysis.
+
+    Args:
+        policy_id: The policy UUID.
+        request: Simulation configuration with input dataset.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+        opa_client: OPA REST API client.
+
+    Returns:
+        The completed simulation record.
+    """
+    from aumos_governance_engine.adapters.policy_simulation import (
+        PolicySimulationRepository,
+        PolicySimulationService,
+    )
+
+    policy_repo = PolicyRepository(db)
+    policy = await policy_repo.get_by_id(policy_id, tenant)
+    rego_content = request.rego_override or policy.rego_content or ""
+
+    sim_repo = PolicySimulationRepository(db)
+    svc = PolicySimulationService(sim_repo=sim_repo, opa_client=opa_client)
+    sim = await svc.simulate(
+        tenant=tenant,
+        policy_id=policy_id,
+        rego_content=rego_content,
+        scenario_name=request.scenario_name,
+        input_dataset=request.input_dataset,
+        triggered_by=tenant.user_id,
+    )
+
+    return PolicySimulationResponse(
+        id=sim.id,
+        tenant_id=sim.tenant_id,
+        policy_id=sim.policy_id,
+        scenario_name=sim.scenario_name,
+        allow_count=sim.allow_count,
+        deny_count=sim.deny_count,
+        results=sim.results,
+        completed_at=sim.completed_at,
+        duration_ms=sim.duration_ms,
+        created_at=sim.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 196 — Policy Versioning
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/policies/{policy_id}/versions",
+    response_model=list[PolicyVersionResponse],
+)
+async def list_policy_versions(
+    policy_id: uuid.UUID,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+) -> list[PolicyVersionResponse]:
+    """List version history for a governance policy.
+
+    Returns all version snapshots ordered newest first, including SHA-256
+    hash for tamper detection.
+
+    Args:
+        policy_id: The policy UUID.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+        page: Page number.
+        page_size: Records per page.
+
+    Returns:
+        List of policy version records.
+    """
+    from aumos_governance_engine.adapters.policy_versioning import PolicyVersionRepository
+
+    repo = PolicyVersionRepository(db)
+    versions = await repo.list_by_policy(
+        policy_id=policy_id,
+        tenant=tenant,
+        page=page,
+        page_size=page_size,
+    )
+    return [
+        PolicyVersionResponse(
+            id=v.id,
+            tenant_id=v.tenant_id,
+            policy_id=v.policy_id,
+            version_number=v.version_number,
+            rego_content=v.rego_content,
+            sha256_hash=v.sha256_hash,
+            change_description=v.change_description,
+            authored_by=v.authored_by,
+            activated_at=v.activated_at,
+            is_current=v.is_current,
+            created_at=v.created_at,
+        )
+        for v in versions
+    ]
+
+
+@router.post(
+    "/policies/{policy_id}/rollback",
+    response_model=PolicyVersionResponse,
+    status_code=201,
+)
+async def rollback_policy(
+    policy_id: uuid.UUID,
+    request: PolicyRollbackRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    audit_db: Annotated[AsyncSession, Depends(get_audit_db_session)],
+    opa_client: Annotated[OPAClient, Depends(lambda: OPAClient())],
+) -> PolicyVersionResponse:
+    """Roll back a governance policy to a previous version.
+
+    Creates a new version record that restores the Rego content from the
+    target version and re-uploads it to OPA. The rollback is written to
+    the Audit Wall for compliance traceability.
+
+    Args:
+        policy_id: The policy UUID.
+        request: Rollback request with target version number.
+        tenant: Tenant context from auth middleware.
+        db: Primary database session.
+        audit_db: Audit Wall database session.
+        opa_client: OPA REST API client.
+
+    Returns:
+        The newly created version record (rollback snapshot).
+    """
+    from aumos_governance_engine.adapters.audit_wall import AuditTrailRepository
+    from aumos_governance_engine.adapters.policy_versioning import (
+        PolicyVersionRepository,
+        PolicyVersionService,
+    )
+
+    version_repo = PolicyVersionRepository(db)
+    audit_repo = AuditTrailRepository(audit_db)
+    svc = PolicyVersionService(
+        version_repo=version_repo,
+        opa_client=opa_client,
+        audit_trail_repo=audit_repo,
+    )
+
+    new_version = await svc.rollback_to_version(
+        tenant=tenant,
+        policy_id=policy_id,
+        target_version_number=request.target_version_number,
+        rolled_back_by=tenant.user_id,
+    )
+
+    return PolicyVersionResponse(
+        id=new_version.id,
+        tenant_id=new_version.tenant_id,
+        policy_id=new_version.policy_id,
+        version_number=new_version.version_number,
+        rego_content=new_version.rego_content,
+        sha256_hash=new_version.sha256_hash,
+        change_description=new_version.change_description,
+        authored_by=new_version.authored_by,
+        activated_at=new_version.activated_at,
+        is_current=new_version.is_current,
+        created_at=new_version.created_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 197 — Decision Analytics
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/policies/{policy_id}/analytics/summary",
+    response_model=DecisionSummaryResponse,
+)
+async def get_decision_summary(
+    policy_id: uuid.UUID,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> DecisionSummaryResponse:
+    """Get aggregated decision analytics for a policy.
+
+    Returns total evaluations, allow/deny counts, allow rate, and average
+    latency over the past 7 days.
+
+    Args:
+        policy_id: The policy UUID.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+
+    Returns:
+        Decision analytics summary.
+    """
+    from aumos_governance_engine.adapters.decision_analytics import (
+        DecisionAnalyticsService,
+        PolicyEvaluationLogRepository,
+    )
+
+    log_repo = PolicyEvaluationLogRepository(db)
+    svc = DecisionAnalyticsService(eval_log_repo=log_repo)
+    summary = await svc.get_decision_summary(tenant=tenant, policy_id=policy_id)
+    return DecisionSummaryResponse(**summary)
+
+
+@router.get(
+    "/policies/{policy_id}/analytics/latency",
+    response_model=LatencyPercentilesResponse,
+)
+async def get_latency_percentiles(
+    policy_id: uuid.UUID,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> LatencyPercentilesResponse:
+    """Get P50/P95/P99 evaluation latency percentiles for a policy.
+
+    Args:
+        policy_id: The policy UUID.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+
+    Returns:
+        Latency percentiles in milliseconds.
+    """
+    from aumos_governance_engine.adapters.decision_analytics import (
+        DecisionAnalyticsService,
+        PolicyEvaluationLogRepository,
+    )
+
+    log_repo = PolicyEvaluationLogRepository(db)
+    svc = DecisionAnalyticsService(eval_log_repo=log_repo)
+    percentiles = await svc.get_latency_percentiles(tenant=tenant, policy_id=policy_id)
+    return LatencyPercentilesResponse(**percentiles)
+
+
+# ---------------------------------------------------------------------------
+# Gap 198 — Rego Authoring UI (validation backend)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/policies/validate-rego", response_model=RegoValidationResponse)
+async def validate_rego(
+    request: RegoValidationRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    opa_client: Annotated[OPAClient, Depends(lambda: OPAClient())],
+) -> RegoValidationResponse:
+    """Validate Rego source code without saving or activating it.
+
+    Sends the Rego to OPA's parse endpoint to check for syntax errors.
+    Returns the parsed package name and rule names for the authoring UI.
+
+    Args:
+        request: Rego validation request with source content.
+        tenant: Tenant context from auth middleware.
+        opa_client: OPA REST API client.
+
+    Returns:
+        Validation result with errors, warnings, package name, and rules.
+    """
+    try:
+        parse_result = await opa_client.parse_module(request.rego_content)
+        return RegoValidationResponse(
+            valid=True,
+            errors=[],
+            warnings=[],
+            package_name=parse_result.get("package_name"),
+            rules=parse_result.get("rules", []),
+        )
+    except Exception as err:
+        return RegoValidationResponse(
+            valid=False,
+            errors=[str(err)],
+            warnings=[],
+            package_name=None,
+            rules=[],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Gap 199 — OPA Bundle Distribution
+# ---------------------------------------------------------------------------
+
+
+@router.get("/bundles/status", response_model=BundleStatusResponse)
+async def get_bundle_status(
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> BundleStatusResponse:
+    """Get OPA bundle distribution status for all sidecars.
+
+    Returns the current bundle ETag and status for all registered
+    OPA sidecar instances, indicating which are up-to-date.
+
+    Args:
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+
+    Returns:
+        Bundle status report.
+    """
+    from aumos_governance_engine.adapters.bundle_service import (
+        BundleService,
+        OPASidecarStatusRepository,
+    )
+
+    sidecar_repo = OPASidecarStatusRepository(db)
+    svc = BundleService(policy_session=db, sidecar_repo=sidecar_repo)
+    status = await svc.get_bundle_status(tenant=tenant)
+    return BundleStatusResponse(**status)
+
+
+@router.get("/bundles/download")
+async def download_bundle(
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    if_none_match: str | None = None,
+) -> Any:
+    """Download the current OPA policy bundle as a .tar.gz archive.
+
+    Supports ETag-based version negotiation via the If-None-Match header.
+    Returns 304 Not Modified if the bundle has not changed since the
+    client's last download.
+
+    Args:
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+        if_none_match: Optional ETag from client for version negotiation.
+
+    Returns:
+        The .tar.gz bundle as a streaming response, or 304 if up-to-date.
+    """
+    from fastapi import Response
+    from fastapi.responses import Response as FastAPIResponse
+    from aumos_governance_engine.adapters.bundle_service import (
+        BundleService,
+        OPASidecarStatusRepository,
+    )
+
+    sidecar_repo = OPASidecarStatusRepository(db)
+    svc = BundleService(policy_session=db, sidecar_repo=sidecar_repo)
+    bundle_bytes, etag = await svc.build_bundle(tenant=tenant)
+
+    if if_none_match and if_none_match == etag:
+        return FastAPIResponse(status_code=304)
+
+    return FastAPIResponse(
+        content=bundle_bytes,
+        media_type="application/gzip",
+        headers={
+            "Content-Disposition": "attachment; filename=aumos-opa-bundle.tar.gz",
+            "ETag": etag,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 201 — External Evidence Import
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/evidence/import/jira",
+    response_model=ExternalEvidenceImportResponse,
+    status_code=201,
+)
+async def import_jira_evidence(
+    request: JiraEvidenceImportRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ExternalEvidenceImportResponse:
+    """Import a Jira issue as a compliance evidence record.
+
+    Fetches the Jira issue via the REST API and creates an EvidenceRecord
+    linked to the specified compliance workflow.
+
+    Args:
+        request: Jira import request with issue key and workflow ID.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+
+    Returns:
+        Import result with evidence record ID and status.
+    """
+    from aumos_governance_engine.adapters.external_evidence import (
+        ExternalEvidenceImportRepository,
+        JiraEvidenceAdapter,
+    )
+    from aumos_governance_engine.adapters.repositories import EvidenceRepository
+    from aumos_governance_engine.core.services import get_governance_settings
+
+    settings = get_governance_settings()
+    import_repo = ExternalEvidenceImportRepository(db)
+    evidence_repo = EvidenceRepository(db)
+    adapter = JiraEvidenceAdapter(
+        jira_base_url=settings.jira_base_url,
+        jira_email=settings.jira_email,
+        jira_api_token=settings.jira_api_token,
+        import_repo=import_repo,
+        evidence_repo=evidence_repo,
+    )
+    result = await adapter.import_issue(
+        tenant=tenant,
+        workflow_id=request.workflow_id,
+        issue_key=request.issue_key,
+        control_ids=request.control_ids,
+    )
+    return ExternalEvidenceImportResponse(**result)
+
+
+@router.post(
+    "/evidence/import/servicenow",
+    response_model=ExternalEvidenceImportResponse,
+    status_code=201,
+)
+async def import_servicenow_evidence(
+    request: ServiceNowEvidenceImportRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ExternalEvidenceImportResponse:
+    """Import a ServiceNow ticket as a compliance evidence record.
+
+    Fetches the ServiceNow record via the Table API and creates an
+    EvidenceRecord linked to the specified compliance workflow.
+
+    Args:
+        request: ServiceNow import request with table, sys_id, and workflow ID.
+        tenant: Tenant context from auth middleware.
+        db: Database session.
+
+    Returns:
+        Import result with evidence record ID and status.
+    """
+    from aumos_governance_engine.adapters.external_evidence import (
+        ExternalEvidenceImportRepository,
+        ServiceNowAdapter,
+    )
+    from aumos_governance_engine.adapters.repositories import EvidenceRepository
+    from aumos_governance_engine.core.services import get_governance_settings
+
+    settings = get_governance_settings()
+    import_repo = ExternalEvidenceImportRepository(db)
+    evidence_repo = EvidenceRepository(db)
+    adapter = ServiceNowAdapter(
+        snow_instance_url=settings.servicenow_instance_url,
+        snow_username=settings.servicenow_username,
+        snow_password=settings.servicenow_password,
+        import_repo=import_repo,
+        evidence_repo=evidence_repo,
+    )
+    result = await adapter.import_ticket(
+        tenant=tenant,
+        workflow_id=request.workflow_id,
+        table=request.table,
+        sys_id=request.sys_id,
+        control_ids=request.control_ids,
+    )
+    return ExternalEvidenceImportResponse(**result)

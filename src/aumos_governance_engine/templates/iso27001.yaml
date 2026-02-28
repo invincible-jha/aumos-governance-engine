@@ -1,0 +1,105 @@
+regulation_code: iso27001
+name: "ISO 27001:2022"
+full_name: "ISO/IEC 27001:2022 — Information Security Management Systems"
+issuing_body: "ISO/IEC"
+description: >
+  ISO 27001:2022 specifies requirements for establishing, implementing, maintaining,
+  and continually improving an Information Security Management System (ISMS).
+  This template covers Annex A controls most relevant to AI platform deployments.
+default_duration_days: 730
+review_milestones:
+  - name: "Gap Analysis"
+    offset_days: 30
+    required_evidence_types:
+      - policy_document
+      - config_export
+  - name: "Internal Audit"
+    offset_days: 180
+    required_evidence_types:
+      - audit_log
+      - test_result
+      - access_review
+  - name: "Management Review"
+    offset_days: 365
+    required_evidence_types:
+      - policy_document
+      - audit_log
+  - name: "Certification Audit"
+    offset_days: 700
+    required_evidence_types:
+      - policy_document
+      - test_result
+      - audit_log
+
+controls:
+  - control_id: "A.5.1"
+    requirement: "Policies for information security: Information security policy and topic-specific policies shall be defined, approved by management, published, communicated to and acknowledged by relevant personnel."
+    evidence_types: [policy_document, training_record]
+    automated: false
+    notes: "Policy approval records and acknowledgement logs."
+
+  - control_id: "A.5.2"
+    requirement: "Information security roles and responsibilities: Information security roles and responsibilities shall be defined and allocated according to the organisation needs."
+    evidence_types: [policy_document, access_review]
+    automated: false
+    notes: "Role matrix and responsibility assignment documentation."
+
+  - control_id: "A.5.23"
+    requirement: "Information security for use of cloud services: Processes for acquisition, use, management and exit from cloud services shall be defined and implemented in accordance with the organisation's information security requirements."
+    evidence_types: [config_export, policy_document]
+    automated: true
+    notes: "Cloud security posture management exports."
+
+  - control_id: "A.6.3"
+    requirement: "Information security awareness, education and training: Personnel of the organisation and relevant interested parties shall receive appropriate information security awareness, education and training."
+    evidence_types: [training_record]
+    automated: false
+    notes: "Training completion records by role."
+
+  - control_id: "A.8.1"
+    requirement: "User endpoint devices: Information stored on, processed by or accessible via user endpoint devices shall be protected."
+    evidence_types: [config_export, policy_document]
+    automated: true
+    notes: "MDM configuration exports and endpoint policy documents."
+
+  - control_id: "A.8.2"
+    requirement: "Privileged access rights: The allocation and use of privileged access rights shall be restricted and managed."
+    evidence_types: [access_review, audit_log]
+    automated: true
+    notes: "Privileged account review logs."
+
+  - control_id: "A.8.5"
+    requirement: "Secure authentication: Secure authentication technologies and procedures shall be implemented based on information access restrictions and the topic-specific policy on access control."
+    evidence_types: [config_export, test_result]
+    automated: true
+    notes: "MFA enforcement reports and pen test results."
+
+  - control_id: "A.8.8"
+    requirement: "Management of technical vulnerabilities: Information about technical vulnerabilities of information systems in use shall be obtained in a timely fashion."
+    evidence_types: [test_result, config_export]
+    automated: true
+    notes: "Vulnerability scan results and patch management reports."
+
+  - control_id: "A.8.15"
+    requirement: "Logging: Logs that record activities, exceptions, faults and other relevant events shall be produced, stored, protected and analysed."
+    evidence_types: [audit_log, config_export]
+    automated: true
+    notes: "Log retention configuration and sample audit logs."
+
+  - control_id: "A.8.24"
+    requirement: "Use of cryptography: Rules for the effective use of cryptography, including cryptographic key management, shall be defined and implemented."
+    evidence_types: [policy_document, config_export]
+    automated: true
+    notes: "Encryption configuration and key management policy."
+
+  - control_id: "A.8.25"
+    requirement: "Secure development life cycle: Rules for the secure development of software and systems shall be established and applied."
+    evidence_types: [policy_document, test_result]
+    automated: false
+    notes: "SDLC policy and SAST/DAST results."
+
+  - control_id: "A.8.28"
+    requirement: "Secure coding: Secure coding principles shall be applied to software development."
+    evidence_types: [test_result, audit_log]
+    automated: true
+    notes: "Static analysis reports and code review logs."

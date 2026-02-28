@@ -1248,6 +1248,26 @@ class ConsentService:
         )
 
 
+# ---------------------------------------------------------------------------
+# Settings accessor (Gap 201 — used by router for Jira/ServiceNow config)
+# ---------------------------------------------------------------------------
+
+
+def get_governance_settings() -> Any:
+    """Get the governance engine settings singleton.
+
+    Lazily imports and instantiates the Settings class to avoid circular
+    imports. The router uses this to retrieve Jira/ServiceNow credentials
+    for external evidence import.
+
+    Returns:
+        The Settings instance (cached by pydantic-settings).
+    """
+    from aumos_governance_engine.settings import Settings
+
+    return Settings()
+
+
 class DataResidencyService:
     """Data residency policy evaluation and enforcement.
 

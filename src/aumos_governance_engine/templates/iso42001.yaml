@@ -1,0 +1,118 @@
+regulation_code: iso42001
+name: "ISO 42001:2023"
+full_name: "ISO/IEC 42001:2023 — Artificial Intelligence Management Systems"
+issuing_body: "ISO/IEC"
+description: >
+  ISO 42001:2023 is the first international standard for AI management systems (AIMS).
+  It provides a structured framework for responsible development, deployment, and
+  monitoring of AI systems, including risk classification, impact assessment, and
+  governance requirements specific to AI. This template focuses on controls required
+  for organizations developing or deploying AI models in enterprise settings.
+default_duration_days: 365
+review_milestones:
+  - name: "AI Inventory and Classification"
+    offset_days: 30
+    required_evidence_types:
+      - policy_document
+      - config_export
+  - name: "AI Impact Assessments"
+    offset_days: 90
+    required_evidence_types:
+      - policy_document
+      - test_result
+  - name: "Monitoring and Metrics Review"
+    offset_days: 180
+    required_evidence_types:
+      - audit_log
+      - test_result
+  - name: "Management Review"
+    offset_days: 365
+    required_evidence_types:
+      - policy_document
+      - audit_log
+      - test_result
+
+controls:
+  - control_id: "6.1.2"
+    requirement: "AI risk assessment: The organisation shall establish, implement and maintain an AI risk assessment process."
+    evidence_types: [policy_document, audit_log]
+    automated: false
+    notes: "AI risk register with likelihood and impact ratings per AI system."
+
+  - control_id: "6.1.4"
+    requirement: "AI system impact assessment: The organisation shall conduct and document AI impact assessments for AI systems."
+    evidence_types: [policy_document, test_result]
+    automated: false
+    notes: "Impact assessment documentation covering societal, ethical, and safety dimensions."
+
+  - control_id: "6.2"
+    requirement: "AI objectives and planning to achieve them: The organisation shall establish AI objectives at relevant functions and levels."
+    evidence_types: [policy_document]
+    automated: false
+    notes: "AI strategy document with measurable objectives and KPIs."
+
+  - control_id: "8.2"
+    requirement: "AI system life cycle: The organisation shall establish a process for the entire life cycle of AI systems."
+    evidence_types: [audit_log, policy_document]
+    automated: true
+    notes: "MLOps lifecycle audit trail — model registry, versioning, deployment logs."
+
+  - control_id: "8.3"
+    requirement: "AI risk treatment: The organisation shall implement appropriate AI risk treatment options."
+    evidence_types: [test_result, policy_document]
+    automated: false
+    notes: "Risk treatment plans and mitigating control evidence per AI system."
+
+  - control_id: "8.4"
+    requirement: "Documentation of AI systems: The organisation shall document AI systems in sufficient detail."
+    evidence_types: [policy_document, config_export]
+    automated: true
+    notes: "Model cards, data sheets, system architecture documentation."
+
+  - control_id: "9.1"
+    requirement: "Monitoring, measurement, analysis and evaluation: The organisation shall monitor the performance of AI systems."
+    evidence_types: [audit_log, test_result]
+    automated: true
+    notes: "Model performance monitoring logs, drift detection reports."
+
+  - control_id: "9.2"
+    requirement: "Internal audit: The organisation shall conduct internal audits at planned intervals."
+    evidence_types: [audit_log, policy_document]
+    automated: false
+    notes: "Internal audit reports and corrective action records."
+
+  - control_id: "A.2.2"
+    requirement: "Human oversight of AI systems: Processes for human oversight shall be implemented, enabling appropriate intervention."
+    evidence_types: [audit_log, policy_document]
+    automated: true
+    notes: "Human-in-the-loop approval audit logs for high-risk AI decisions."
+
+  - control_id: "A.2.3"
+    requirement: "Explainability of AI systems: Appropriate explainability mechanisms shall be established for AI systems."
+    evidence_types: [test_result, policy_document]
+    automated: true
+    notes: "SHAP/LIME explainability reports for high-risk model decisions."
+
+  - control_id: "A.2.5"
+    requirement: "Bias and fairness in AI: Processes shall be implemented to identify and mitigate bias and unfair outcomes in AI systems."
+    evidence_types: [test_result, policy_document]
+    automated: true
+    notes: "Fairness metric reports (disparate impact, equalized odds) per protected group."
+
+  - control_id: "A.2.6"
+    requirement: "Transparency in AI systems: Appropriate levels of transparency shall be provided about AI systems and their use."
+    evidence_types: [policy_document, config_export]
+    automated: false
+    notes: "AI usage disclosures and transparency documentation for stakeholders."
+
+  - control_id: "A.3.3"
+    requirement: "Data quality for AI: Processes to ensure the quality of data used to develop, train and test AI systems shall be implemented."
+    evidence_types: [test_result, audit_log]
+    automated: true
+    notes: "Data quality validation reports and lineage audit logs."
+
+  - control_id: "A.6.1"
+    requirement: "Incident management for AI: Processes shall be established to identify, report and respond to AI-related incidents."
+    evidence_types: [audit_log, policy_document]
+    automated: true
+    notes: "AI incident log and post-incident review reports."

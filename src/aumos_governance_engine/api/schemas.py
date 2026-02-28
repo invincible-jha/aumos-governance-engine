@@ -297,3 +297,279 @@ class RegulationControlResponse(BaseModel):
     control_ids: list[str] = Field(description="Technical control identifiers")
     automated: bool = Field(description="Whether automated evidence collection can satisfy this control")
     notes: str | None = Field(description="Optional implementation notes")
+
+
+# ---------------------------------------------------------------------------
+# Gap 194 — Policy Test Case and Run schemas
+# ---------------------------------------------------------------------------
+
+
+class PolicyTestCaseCreateRequest(BaseModel):
+    """Request body for creating a policy test case."""
+
+    name: str = Field(description="Human-readable test case name", min_length=1, max_length=255)
+    input_data: dict[str, Any] = Field(description="JSON input payload to evaluate against the policy")
+    expected_allow: bool = Field(description="True = expect allow; False = expect deny")
+    description: str | None = Field(default=None, description="Scenario description")
+    expected_violations: list[str] = Field(
+        default_factory=list,
+        description="Optional expected violation message substrings",
+    )
+    tags: list[str] = Field(default_factory=list, description="Optional grouping tags")
+
+
+class PolicyTestCaseResponse(BaseModel):
+    """Response schema for a policy test case."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    policy_id: uuid.UUID
+    name: str
+    description: str | None
+    input_data: dict[str, Any]
+    expected_allow: bool
+    expected_violations: list[str]
+    tags: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class PolicyTestRunRequest(BaseModel):
+    """Request body for triggering a policy test run."""
+
+    test_case_ids: list[uuid.UUID] | None = Field(
+        default=None,
+        description="Optional subset of test case IDs to run. None = run all.",
+    )
+
+
+class PolicyTestRunResponse(BaseModel):
+    """Response schema for a policy test run."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    policy_id: uuid.UUID
+    status: str = Field(description="running | passed | failed | error")
+    total_cases: int
+    passed_cases: int
+    failed_cases: int
+    error_cases: int
+    results: list[dict[str, Any]]
+    started_at: datetime
+    completed_at: datetime | None
+    duration_ms: int | None
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Gap 195 — Policy Simulation schemas
+# ---------------------------------------------------------------------------
+
+
+class PolicySimulationRequest(BaseModel):
+    """Request body for running a policy simulation."""
+
+    scenario_name: str = Field(description="Human-readable scenario label", min_length=1, max_length=255)
+    input_dataset: list[dict[str, Any]] = Field(
+        description="List of input payloads to simulate against the policy",
+        min_length=1,
+    )
+    rego_override: str | None = Field(
+        default=None,
+        description="Optional Rego content override for what-if analysis. Uses active policy if not provided.",
+    )
+
+
+class PolicySimulationResponse(BaseModel):
+    """Response schema for a policy simulation run."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    policy_id: uuid.UUID
+    scenario_name: str
+    allow_count: int
+    deny_count: int
+    results: list[dict[str, Any]]
+    completed_at: datetime | None
+    duration_ms: int | None
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Gap 196 — Policy Version schemas
+# ---------------------------------------------------------------------------
+
+
+class PolicyVersionResponse(BaseModel):
+    """Response schema for a policy version snapshot."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    policy_id: uuid.UUID
+    version_number: int
+    rego_content: str
+    sha256_hash: str
+    change_description: str | None
+    authored_by: uuid.UUID
+    activated_at: datetime | None
+    is_current: bool
+    created_at: datetime
+
+
+class PolicyRollbackRequest(BaseModel):
+    """Request body for rolling back a policy to a previous version."""
+
+    target_version_number: int = Field(
+        description="The version number to roll back to",
+        ge=1,
+    )
+    change_description: str | None = Field(
+        default=None,
+        description="Optional description explaining why the rollback is being performed",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 197 — Decision Analytics schemas
+# ---------------------------------------------------------------------------
+
+
+class DecisionSummaryResponse(BaseModel):
+    """Response schema for policy decision analytics summary."""
+
+    policy_id: str
+    total_evaluations: int
+    allow_count: int
+    deny_count: int
+    allow_rate: float
+    avg_latency_ms: float
+    since: str
+
+
+class LatencyPercentilesResponse(BaseModel):
+    """Response schema for latency percentile analytics."""
+
+    p50: float = Field(description="50th percentile latency in milliseconds")
+    p95: float = Field(description="95th percentile latency in milliseconds")
+    p99: float = Field(description="99th percentile latency in milliseconds")
+
+
+# ---------------------------------------------------------------------------
+# Gap 198 — Rego Authoring UI schemas
+# ---------------------------------------------------------------------------
+
+
+class RegoValidationRequest(BaseModel):
+    """Request body for validating Rego source code."""
+
+    rego_content: str = Field(description="Rego source code to validate")
+
+
+class RegoValidationResponse(BaseModel):
+    """Response schema for Rego validation result."""
+
+    valid: bool = Field(description="True if the Rego source is syntactically valid")
+    errors: list[str] = Field(default_factory=list, description="List of parse/compile errors")
+    warnings: list[str] = Field(default_factory=list, description="List of lint warnings")
+    package_name: str | None = Field(default=None, description="Parsed package name")
+    rules: list[str] = Field(default_factory=list, description="List of rule names in the policy")
+
+
+# ---------------------------------------------------------------------------
+# Gap 199 — Bundle Distribution schemas
+# ---------------------------------------------------------------------------
+
+
+class BundleStatusResponse(BaseModel):
+    """Response schema for OPA bundle distribution status."""
+
+    current_bundle_etag: str
+    sidecar_count: int
+    sidecars: list[dict[str, Any]]
+
+
+# ---------------------------------------------------------------------------
+# Gap 201 — External Evidence Import schemas
+# ---------------------------------------------------------------------------
+
+
+class JiraEvidenceImportRequest(BaseModel):
+    """Request body for importing a Jira issue as evidence."""
+
+    workflow_id: uuid.UUID = Field(description="Target compliance workflow UUID")
+    issue_key: str = Field(description="Jira issue key (e.g., PROJ-1234)")
+    control_ids: list[str] = Field(
+        default_factory=list,
+        description="Regulation control IDs this issue satisfies",
+    )
+
+
+class ServiceNowEvidenceImportRequest(BaseModel):
+    """Request body for importing a ServiceNow ticket as evidence."""
+
+    workflow_id: uuid.UUID = Field(description="Target compliance workflow UUID")
+    table: str = Field(description="ServiceNow table name (e.g., incident, change_request)")
+    sys_id: str = Field(description="The sys_id of the ServiceNow record")
+    control_ids: list[str] = Field(
+        default_factory=list,
+        description="Regulation control IDs this ticket satisfies",
+    )
+
+
+class ExternalEvidenceImportResponse(BaseModel):
+    """Response schema for an external evidence import result."""
+
+    import_record_id: str
+    evidence_record_id: str | None
+    status: str = Field(description="pending | success | failed")
+    error: str | None = Field(default=None)
+
+
+# ---------------------------------------------------------------------------
+# Gap 200 — Compliance Workflow Template schemas
+# ---------------------------------------------------------------------------
+
+
+class WorkflowTemplateSummary(BaseModel):
+    """Summary metadata for a compliance workflow template."""
+
+    regulation_code: str = Field(description="Regulation code (e.g., soc2, hipaa)")
+    name: str = Field(description="Short regulation name")
+    full_name: str = Field(description="Full official regulation name")
+    issuing_body: str = Field(description="Issuing organization")
+    description: str = Field(description="Template description")
+    default_duration_days: int = Field(description="Default workflow duration in days")
+    milestone_count: int = Field(description="Number of review milestones in this template")
+    control_count: int = Field(description="Number of controls in this template")
+
+
+class WorkflowTemplateListResponse(BaseModel):
+    """Response schema for listing available compliance workflow templates."""
+
+    templates: list[WorkflowTemplateSummary] = Field(description="Available regulation templates")
+
+
+class WorkflowFromTemplateRequest(BaseModel):
+    """Request body for instantiating a compliance workflow from a template."""
+
+    regulation_code: str = Field(
+        description="Regulation template to use: soc2 | iso27001 | hipaa | iso42001 | eu_ai_act | fedramp",
+    )
+    name: str = Field(
+        description="Human-readable workflow name, e.g., 'SOC 2 Type II — FY2026'",
+        min_length=1,
+        max_length=255,
+    )
+    assigned_to: uuid.UUID | None = Field(
+        default=None,
+        description="UUID of the user responsible for this workflow",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Optional initial notes for the compliance team",
+    )
+    duration_days: int | None = Field(
+        default=None,
+        ge=1,
+        description="Override the template default duration in days",
+    )

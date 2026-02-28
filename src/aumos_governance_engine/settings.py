@@ -102,4 +102,42 @@ class Settings(AumOSSettings):
         description="TTL in seconds for regulation mapping cache entries.",
     )
 
+    # -------------------------------------------------------------------------
+    # Gap 201 — External evidence import (Jira + ServiceNow)
+    # -------------------------------------------------------------------------
+
+    jira_base_url: str = Field(
+        default="",
+        description="Jira instance base URL for evidence import (e.g., https://org.atlassian.net).",
+    )
+    jira_email: str = Field(
+        default="",
+        description="Service account email for Jira API basic auth.",
+    )
+    jira_api_token: str = Field(
+        default="",
+        description="API token for Jira authentication.",
+    )
+    servicenow_instance_url: str = Field(
+        default="",
+        description="ServiceNow instance URL for evidence import (e.g., https://org.service-now.com).",
+    )
+    servicenow_username: str = Field(
+        default="",
+        description="ServiceNow service account username.",
+    )
+    servicenow_password: str = Field(
+        default="",
+        description="ServiceNow service account password.",
+    )
+
+    # -------------------------------------------------------------------------
+    # Gap 197 — Decision analytics Redis caching
+    # -------------------------------------------------------------------------
+
+    analytics_cache_ttl_seconds: int = Field(
+        default=300,
+        description="TTL in seconds for decision analytics cache entries in Redis.",
+    )
+
     model_config = SettingsConfigDict(env_prefix="AUMOS_GOVERNANCE_")

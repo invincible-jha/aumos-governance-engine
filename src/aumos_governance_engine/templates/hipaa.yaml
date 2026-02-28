@@ -1,0 +1,111 @@
+regulation_code: hipaa
+name: "HIPAA Security Rule"
+full_name: "Health Insurance Portability and Accountability Act — Security Rule (45 CFR Part 164)"
+issuing_body: "HHS OCR"
+description: >
+  HIPAA Security Rule establishes national standards to protect individuals' electronic
+  protected health information (ePHI) that is created, received, used, or maintained
+  by a covered entity or business associate. This template covers Administrative,
+  Physical, and Technical Safeguards required under 45 CFR § 164.308-312.
+default_duration_days: 365
+review_milestones:
+  - name: "Risk Analysis"
+    offset_days: 45
+    required_evidence_types:
+      - policy_document
+      - audit_log
+  - name: "Technical Safeguards Review"
+    offset_days: 120
+    required_evidence_types:
+      - config_export
+      - access_review
+      - test_result
+  - name: "Training Completion"
+    offset_days: 180
+    required_evidence_types:
+      - training_record
+  - name: "Annual Security Assessment"
+    offset_days: 365
+    required_evidence_types:
+      - test_result
+      - audit_log
+      - policy_document
+
+controls:
+  - control_id: "164.308(a)(1)"
+    requirement: "Risk Analysis (Required): Conduct an accurate and thorough assessment of the potential risks and vulnerabilities to the confidentiality, integrity, and availability of ePHI."
+    evidence_types: [policy_document, audit_log]
+    automated: false
+    notes: "Annual risk analysis report documenting threats, vulnerabilities, and likelihood."
+
+  - control_id: "164.308(a)(2)"
+    requirement: "Assigned Security Responsibility (Required): Identify the security official who is responsible for the development and implementation of policies and procedures."
+    evidence_types: [policy_document]
+    automated: false
+    notes: "Designated HIPAA Security Officer appointment letter."
+
+  - control_id: "164.308(a)(3)"
+    requirement: "Workforce Security (Required): Implement policies and procedures to ensure that all members of its workforce have appropriate access to ePHI."
+    evidence_types: [access_review, policy_document]
+    automated: true
+    notes: "User access review logs and workforce clearance procedures."
+
+  - control_id: "164.308(a)(4)"
+    requirement: "Information Access Management (Required): Implement policies and procedures for authorizing access to ePHI consistent with the Privacy Rule."
+    evidence_types: [access_review, audit_log]
+    automated: true
+    notes: "Access authorization records and minimum necessary access documentation."
+
+  - control_id: "164.308(a)(5)"
+    requirement: "Security Awareness and Training (Required): Implement a security awareness and training program for all members of its workforce."
+    evidence_types: [training_record]
+    automated: false
+    notes: "Training completion records with dates and attestations."
+
+  - control_id: "164.308(a)(6)"
+    requirement: "Security Incident Procedures (Required): Implement policies and procedures to address security incidents."
+    evidence_types: [policy_document, audit_log]
+    automated: false
+    notes: "Incident response plan and historical incident log."
+
+  - control_id: "164.308(a)(7)"
+    requirement: "Contingency Plan (Required): Establish and implement policies and procedures for responding to an emergency or other occurrence that damages systems that contain ePHI."
+    evidence_types: [policy_document, test_result]
+    automated: false
+    notes: "DR/BCP policy and tabletop or functional test results."
+
+  - control_id: "164.310(a)(1)"
+    requirement: "Facility Access Controls (Required): Implement policies and procedures to limit physical access to its electronic information systems and the facility where they are housed."
+    evidence_types: [policy_document, config_export]
+    automated: false
+    notes: "Physical access control policy and badge access logs."
+
+  - control_id: "164.312(a)(1)"
+    requirement: "Access Control (Required): Implement technical policies and procedures for electronic information systems that maintain ePHI to allow access only to those persons or software programs that have been granted access rights."
+    evidence_types: [config_export, access_review]
+    automated: true
+    notes: "IAM configuration export and quarterly access review."
+
+  - control_id: "164.312(a)(2)(iv)"
+    requirement: "Encryption and Decryption (Addressable): Implement a mechanism to encrypt and decrypt ePHI."
+    evidence_types: [config_export, policy_document]
+    automated: true
+    notes: "Encryption at rest and in transit configuration exports."
+
+  - control_id: "164.312(b)"
+    requirement: "Audit Controls (Required): Implement hardware, software, and/or procedural mechanisms that record and examine activity in information systems that contain or use ePHI."
+    evidence_types: [audit_log, config_export]
+    automated: true
+    notes: "Audit log samples and log retention configuration."
+
+  - control_id: "164.312(c)(1)"
+    requirement: "Integrity (Required): Implement policies and procedures to protect ePHI from improper alteration or destruction."
+    evidence_types: [config_export, test_result]
+    automated: true
+    notes: "Integrity monitoring reports and hash verification results."
+
+  - control_id: "164.312(e)(1)"
+    requirement: "Transmission Security (Required): Implement technical security measures to guard against unauthorized access to ePHI that is being transmitted over an electronic communications network."
+    evidence_types: [config_export, test_result]
+    automated: true
+    notes: "TLS configuration exports and network penetration test results."

@@ -1,0 +1,119 @@
+regulation_code: fedramp
+name: "FedRAMP Moderate"
+full_name: "Federal Risk and Authorization Management Program — Moderate Impact Baseline"
+issuing_body: "GSA / OMB"
+description: >
+  FedRAMP Moderate baseline applies to cloud service offerings (CSOs) processing, storing,
+  or transmitting Controlled Unclassified Information (CUI). It maps to NIST SP 800-53 Rev 5
+  and requires 325 controls across 17 control families. This template focuses on the
+  high-priority control families most relevant to AI platform deployments.
+default_duration_days: 365
+review_milestones:
+  - name: "System Security Plan (SSP)"
+    offset_days: 60
+    required_evidence_types:
+      - policy_document
+      - config_export
+  - name: "Security Assessment"
+    offset_days: 180
+    required_evidence_types:
+      - test_result
+      - penetration_test
+      - audit_log
+  - name: "Authorization Package"
+    offset_days: 300
+    required_evidence_types:
+      - policy_document
+      - test_result
+      - audit_log
+  - name: "Continuous Monitoring"
+    offset_days: 365
+    required_evidence_types:
+      - audit_log
+      - config_export
+      - test_result
+
+controls:
+  - control_id: "AC-2"
+    requirement: "Account Management: Manage information system accounts, including establishing, activating, modifying, reviewing, disabling, and removing accounts."
+    evidence_types: [access_review, audit_log]
+    automated: true
+    notes: "Automated quarterly access review reports and account lifecycle audit logs."
+
+  - control_id: "AC-3"
+    requirement: "Access Enforcement: Enforce approved authorizations for logical access to information and system resources."
+    evidence_types: [config_export, access_review]
+    automated: true
+    notes: "IAM policy exports and RBAC configuration documentation."
+
+  - control_id: "AC-17"
+    requirement: "Remote Access: Establish and document usage restrictions, configuration/connection requirements, and implementation guidance for each type of remote access allowed."
+    evidence_types: [config_export, policy_document]
+    automated: true
+    notes: "VPN/remote access configuration exports and policy documentation."
+
+  - control_id: "AU-2"
+    requirement: "Event Logging: Identify the types of events that the system is capable of logging in support of the audit function."
+    evidence_types: [config_export, audit_log]
+    automated: true
+    notes: "Logging configuration and sample audit logs demonstrating required event types."
+
+  - control_id: "AU-9"
+    requirement: "Protection of Audit Information: Protect audit information and audit tools from unauthorized access, modification, and deletion."
+    evidence_types: [config_export, audit_log]
+    automated: true
+    notes: "Audit log integrity controls and immutable storage configuration."
+
+  - control_id: "CA-7"
+    requirement: "Continuous Monitoring: Develop a system-level continuous monitoring strategy and implement continuous monitoring."
+    evidence_types: [audit_log, test_result, config_export]
+    automated: true
+    notes: "ConMon reports, vulnerability scanning results, and SIEM configuration."
+
+  - control_id: "CM-6"
+    requirement: "Configuration Settings: Establish and document configuration settings for information technology products employed within the information system."
+    evidence_types: [config_export, audit_log]
+    automated: true
+    notes: "Baseline configuration exports and configuration change audit trail."
+
+  - control_id: "IA-2"
+    requirement: "Identification and Authentication (Organizational Users): Uniquely identify and authenticate organizational users."
+    evidence_types: [config_export, test_result]
+    automated: true
+    notes: "MFA enforcement configuration and authentication testing results."
+
+  - control_id: "IA-5"
+    requirement: "Authenticator Management: Manage information system authenticators by verifying identity of individual, group, role, or device being issued an authenticator."
+    evidence_types: [config_export, access_review]
+    automated: true
+    notes: "Password policy configuration and service account credential review."
+
+  - control_id: "RA-5"
+    requirement: "Vulnerability Monitoring and Scanning: Monitor and scan for vulnerabilities in the information system and hosted applications."
+    evidence_types: [test_result, config_export]
+    automated: true
+    notes: "Automated vulnerability scan results (monthly minimum) and remediation tracking."
+
+  - control_id: "SA-11"
+    requirement: "Developer Testing and Evaluation: Require the developer of the information system, system component, or information system service to implement a security assessment plan."
+    evidence_types: [test_result, policy_document]
+    automated: false
+    notes: "SAST/DAST results, code review evidence, and developer security testing policy."
+
+  - control_id: "SC-8"
+    requirement: "Transmission Confidentiality and Integrity: Implement cryptographic mechanisms to prevent unauthorized disclosure of information and detect changes to information during transmission."
+    evidence_types: [config_export, test_result]
+    automated: true
+    notes: "TLS configuration exports and network pen test results."
+
+  - control_id: "SC-28"
+    requirement: "Protection of Information at Rest: Implement cryptographic mechanisms to prevent unauthorized disclosure and modification of information at rest."
+    evidence_types: [config_export, policy_document]
+    automated: true
+    notes: "Encryption at rest configuration for all data stores."
+
+  - control_id: "SI-4"
+    requirement: "System Monitoring: Monitor the information system to detect attacks and indicators of potential attacks."
+    evidence_types: [audit_log, config_export, test_result]
+    automated: true
+    notes: "SIEM/IDS configuration and monitoring alert samples."

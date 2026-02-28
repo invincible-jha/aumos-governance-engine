@@ -1,0 +1,105 @@
+regulation_code: soc2
+name: "SOC 2 Type II"
+full_name: "SOC 2 Type II — Trust Services Criteria"
+issuing_body: "AICPA"
+description: >
+  SOC 2 Type II evaluates the design and operating effectiveness of controls
+  relevant to security, availability, processing integrity, confidentiality,
+  and privacy. This template covers the Trust Services Criteria (TSC) common
+  controls (CC) required for an unqualified audit opinion.
+default_duration_days: 365
+review_milestones:
+  - name: "Control Evidence Collection"
+    offset_days: 30
+    required_evidence_types:
+      - audit_log
+      - config_export
+      - access_review
+  - name: "Mid-Year Assessment"
+    offset_days: 182
+    required_evidence_types:
+      - test_result
+      - policy_document
+  - name: "Final Evidence Package"
+    offset_days: 330
+    required_evidence_types:
+      - audit_log
+      - penetration_test
+      - training_record
+  - name: "Auditor Attestation"
+    offset_days: 365
+    required_evidence_types:
+      - policy_document
+
+controls:
+  - control_id: "CC1.1"
+    requirement: "COSO Principle 1: The entity demonstrates a commitment to integrity and ethical values."
+    evidence_types: [policy_document, training_record]
+    automated: false
+    notes: "Requires annual ethics training records and code of conduct acknowledgements."
+
+  - control_id: "CC1.2"
+    requirement: "COSO Principle 2: The board of directors demonstrates independence from management and exercises oversight of the development and performance of internal control."
+    evidence_types: [policy_document]
+    automated: false
+    notes: "Board meeting minutes and charter documents."
+
+  - control_id: "CC2.1"
+    requirement: "COSO Principle 13: The entity obtains or generates and uses relevant, quality information to support the functioning of internal control."
+    evidence_types: [audit_log, config_export]
+    automated: true
+    notes: "Log aggregation and retention policies."
+
+  - control_id: "CC6.1"
+    requirement: "The entity implements logical access security software, infrastructure, and architectures over protected information assets to protect them from security events."
+    evidence_types: [config_export, access_review]
+    automated: true
+    notes: "IAM configuration exports, access review logs."
+
+  - control_id: "CC6.2"
+    requirement: "Prior to issuing system credentials and granting system access, the entity registers and authorizes new internal and external users."
+    evidence_types: [access_review, audit_log]
+    automated: true
+    notes: "User provisioning audit logs."
+
+  - control_id: "CC6.3"
+    requirement: "The entity authorizes, modifies, or removes access to data, software, functions, and other protected information assets based on approved and documented access requests."
+    evidence_types: [access_review, audit_log]
+    automated: true
+    notes: "Access change audit trail."
+
+  - control_id: "CC7.1"
+    requirement: "To meet its objectives, the entity uses detection and monitoring procedures to identify changes to configurations or new vulnerabilities."
+    evidence_types: [config_export, test_result]
+    automated: true
+    notes: "Vulnerability scan results and configuration drift alerts."
+
+  - control_id: "CC7.2"
+    requirement: "The entity monitors system components and the operation of those controls on an ongoing basis to detect anomalies."
+    evidence_types: [audit_log, test_result]
+    automated: true
+    notes: "SIEM alerts and anomaly detection logs."
+
+  - control_id: "CC8.1"
+    requirement: "The entity authorizes, designs, develops or acquires, configures, documents, tests, approves, and implements changes to infrastructure, data, software, and procedures."
+    evidence_types: [audit_log, policy_document]
+    automated: true
+    notes: "Change management audit trail."
+
+  - control_id: "CC9.1"
+    requirement: "The entity identifies, selects, and develops risk mitigation activities for risks arising from potential business disruptions."
+    evidence_types: [policy_document, test_result]
+    automated: false
+    notes: "Business continuity plan and DR test results."
+
+  - control_id: "A1.1"
+    requirement: "The entity maintains, monitors, and evaluates current processing capacity and use of system components."
+    evidence_types: [config_export, audit_log]
+    automated: true
+    notes: "Capacity metrics and SLA monitoring reports."
+
+  - control_id: "C1.1"
+    requirement: "The entity identifies and maintains confidential information to meet the entity's objectives related to confidentiality."
+    evidence_types: [config_export, policy_document]
+    automated: false
+    notes: "Data classification policy and DLP configuration."
