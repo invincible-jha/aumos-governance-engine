@@ -25,9 +25,9 @@ from aumos_common.auth import TenantContext
 from aumos_common.errors import NotFoundError, ValidationError
 from aumos_common.observability import get_logger
 
-from aumos_governance_engine.adapters.audit_wall import AuditWallRepository
+from aumos_governance_engine.adapters.audit_wall import AuditTrailRepository as AuditWallRepository
 from aumos_governance_engine.adapters.repositories import ComplianceWorkflowRepository
-from aumos_governance_engine.core.models import ComplianceWorkflow
+from aumos_governance_engine.core.models import ComplianceWorkflow  # noqa: F401 — used as return type
 
 logger = get_logger(__name__)
 
@@ -232,35 +232,20 @@ class ComplianceTemplateService:
             first_milestone_offset = template.review_milestones[0].get("offset_days", 30)
             next_due = created_at_utc + timedelta(days=first_milestone_offset)
 
-        # Build milestone + control metadata to embed in the workflow notes/metadata
-        template_metadata: dict[str, Any] = {
-            "template_regulation_code": regulation_code,
-            "template_name": template.name,
-            "template_milestones": template.review_milestones,
-            "template_controls": template.controls,
-            "template_duration_days": effective_duration,
-            "instantiated_from_template": True,
-        }
-
-        # Compose initial notes combining user notes and template description
+        # Compose initial notes combining template description and user notes
         combined_notes: str = template.description.strip()
         if notes:
             combined_notes = f"{combined_notes}\n\n{notes}"
 
-        workflow = ComplianceWorkflow(
-            tenant_id=tenant.tenant_id,
+        # Persist workflow using the repository's create() signature
+        workflow = await self._workflow_repo.create(
+            tenant=tenant,
             regulation=regulation_code,
             name=workflow_name,
-            status="initiated",
-            evidence_count=0,
-            last_assessment=None,
             next_due=next_due,
             assigned_to=assigned_to,
             notes=combined_notes,
         )
-
-        # Persist workflow
-        workflow = await self._workflow_repo.create(workflow)
 
         logger.info(
             "Compliance workflow instantiated from template",
@@ -273,7 +258,7 @@ class ComplianceTemplateService:
 
         # Write to Audit Wall
         try:
-            await self._audit_repo.write(
+            await self._audit_repo.append(
                 tenant_id=tenant.tenant_id,
                 event_type="governance.compliance.workflow.created_from_template",
                 actor_id=actor_id,
@@ -288,7 +273,7 @@ class ComplianceTemplateService:
                     "milestone_count": len(template.review_milestones),
                     "duration_days": effective_duration,
                 },
-                source_service="aumos-governance-engine",
+                timestamp=datetime.now(UTC),
                 correlation_id=correlation_id,
             )
         except Exception as audit_exc:

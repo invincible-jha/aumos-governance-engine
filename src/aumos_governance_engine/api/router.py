@@ -58,6 +58,9 @@ from aumos_governance_engine.api.schemas import (
     PolicyEvaluateResponse,
     PolicyRollbackRequest,
     PolicySimulationRequest,
+    WorkflowFromTemplateRequest,
+    WorkflowTemplateListResponse,
+    WorkflowTemplateSummary,
     PolicySimulationResponse,
     PolicyTestCaseCreateRequest,
     PolicyTestCaseResponse,
@@ -1285,3 +1288,108 @@ async def import_servicenow_evidence(
         control_ids=request.control_ids,
     )
     return ExternalEvidenceImportResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# Gap 200 — Compliance Workflow Templates
+# ---------------------------------------------------------------------------
+
+
+@router.get("/compliance/templates", response_model=WorkflowTemplateListResponse)
+async def list_compliance_templates(
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+) -> WorkflowTemplateListResponse:
+    """List all available compliance workflow templates.
+
+    Returns summary metadata for all pre-built regulation templates
+    (SOC 2, ISO 27001, HIPAA, ISO 42001, EU AI Act, FedRAMP Moderate).
+    Templates can be instantiated using POST /compliance/workflows/from-template.
+
+    Args:
+        tenant: Tenant context from auth middleware.
+
+    Returns:
+        List of template summaries with control and milestone counts.
+    """
+    from aumos_governance_engine.core.template_service import WorkflowTemplate, _TEMPLATE_DIR
+
+    summaries = []
+    if _TEMPLATE_DIR.exists():
+        import yaml as _yaml
+
+        for yaml_file in sorted(_TEMPLATE_DIR.glob("*.yaml")):
+            try:
+                raw = _yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
+                template = WorkflowTemplate(raw)
+                summaries.append(WorkflowTemplateSummary(**template.to_summary_dict()))
+            except Exception:
+                pass
+
+    return WorkflowTemplateListResponse(templates=summaries)
+
+
+@router.post(
+    "/compliance/workflows/from-template",
+    response_model=ComplianceWorkflowResponse,
+    status_code=201,
+)
+async def create_workflow_from_template(
+    request: WorkflowFromTemplateRequest,
+    tenant: Annotated[TenantContext, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    audit_db: Annotated[AsyncSession, Depends(get_audit_db_session)],
+) -> ComplianceWorkflowResponse:
+    """Instantiate a compliance workflow from a pre-built regulation template.
+
+    Creates a new ComplianceWorkflow pre-populated with the control IDs,
+    required evidence types, and review milestones defined in the template.
+    Writes an Audit Wall entry for the instantiation.
+
+    Args:
+        request: Template instantiation request with regulation code and name.
+        tenant: Tenant context from auth middleware.
+        db: Primary database session.
+        audit_db: Audit Wall database session.
+
+    Returns:
+        The newly created compliance workflow.
+
+    Raises:
+        404: If the specified regulation code does not have a template.
+        422: If the workflow name is invalid.
+    """
+    from aumos_governance_engine.adapters.audit_wall import AuditTrailRepository as _AuditTrailRepo
+    from aumos_governance_engine.core.template_service import ComplianceTemplateService
+
+    workflow_repo = ComplianceWorkflowRepository(db)
+    audit_repo = _AuditTrailRepo(audit_db)
+
+    svc = ComplianceTemplateService(
+        workflow_repo=workflow_repo,
+        audit_repo=audit_repo,
+    )
+
+    workflow = await svc.instantiate_from_template(
+        tenant=tenant,
+        regulation_code=request.regulation_code,
+        workflow_name=request.name,
+        actor_id=tenant.user_id,
+        assigned_to=request.assigned_to,
+        notes=request.notes,
+        duration_days=request.duration_days,
+    )
+
+    return ComplianceWorkflowResponse(
+        id=workflow.id,
+        tenant_id=workflow.tenant_id,
+        regulation=workflow.regulation,
+        name=workflow.name,
+        status=workflow.status,
+        evidence_count=workflow.evidence_count,
+        last_assessment=workflow.last_assessment,
+        next_due=workflow.next_due,
+        assigned_to=workflow.assigned_to,
+        notes=workflow.notes,
+        created_at=workflow.created_at,
+        updated_at=workflow.updated_at,
+    )
